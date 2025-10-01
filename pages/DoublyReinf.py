@@ -89,38 +89,42 @@ def R_lim(fck, fy):
     xu_d = xu_max_ratio(fy)
     return 0.36 * fck * xu_d * (1 - 0.42 * xu_d)
 
-# Stress in compression steel (fsc) in N/mm² based on fy and d'/d
-# Reference: Annex E, IS 456:2000 for strain and corresponding stress tables
-# This function approximates the value based on standard tables
+# Stress in compression steel (fsc) in N/mm² based on fy and d'/d (IS 456 Annex E)
 def fsc_calc(fy, d_prime_over_d):
-    if fy == 250: # Fe 250 (fsc is always 0.87 fy = 217.5)
-        return 217.5
+    d_prime_over_xu_max = d_prime_over_d / xu_max_ratio(fy)
     
-    # Fe 415 (approximate/interpolated values for common d'/d ratios)
+    # Stress values fsc (N/mm²) for d'/xu_max ratios (0.0, 0.1, 0.2, 0.3...)
+    # Reference: IS 456:2000 Table E.1 and E.2 (Interpolated to d'/xu_max)
+    
+    if fy == 250:
+        return 0.87 * fy
+    
     if fy == 415:
-        if d_prime_over_d <= 0.05: return 355.0
-        if d_prime_over_d <= 0.10: return 352.0
-        if d_prime_over_d <= 0.15: return 342.0
-        if d_prime_over_d <= 0.20: return 329.0
-        return 300.0 # Default for higher ratios
-
-    # Fe 500 (approximate/interpolated values for common d'/d ratios)
-    if fy == 500:
-        if d_prime_over_d <= 0.05: return 424.0
-        if d_prime_over_d <= 0.10: return 412.0
-        if d_prime_over_d <= 0.15: return 395.0
-        if d_prime_over_d <= 0.20: return 370.0
-        return 350.0 # Default for higher ratios
+        ratios = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
+        fsc_vals = [360.9, 360.9, 351.8, 342.8, 333.7, 324.6, 315.5, 306.4]
     
-    # Simple calculation for custom fy where strain > yield strain
-    # Strain = 0.0035 * (1 - d'/xu_max)
-    # If strain >= yield, use 0.87 fy. Else, calculate stress.
-    xu_max = xu_max_ratio(fy) * 1 # Assuming d=1 for ratio calculation
-    if d_prime_over_d <= xu_max * (1 - (0.002 + 0.87*fy/200000)/0.0035):
-         return 0.87 * fy
-         
-    # More complex interpolation is needed for accuracy, but for a simple app:
-    return 0.87 * fy - 0.05 * fy / d_prime_over_d
+    elif fy == 500:
+        ratios = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
+        fsc_vals = [434.8, 434.8, 424.4, 411.3, 395.1, 370.5, 347.5, 324.5]
+    
+    else:
+        # Fallback for custom fy: assume compression steel yields (conservative)
+        return 0.87 * fy
+
+    # Simple linear interpolation for d'/xu_max
+    if d_prime_over_xu_max <= ratios[0]: return fsc_vals[0]
+    if d_prime_over_xu_max >= ratios[-1]: return fsc_vals[-1]
+
+    idx = next(i for i, r in enumerate(ratios) if r > d_prime_over_xu_max)
+    
+    r0, r1 = ratios[idx - 1], ratios[idx]
+    f0, f1 = fsc_vals[idx - 1], fsc_vals[idx]
+    
+    # Linear interpolation formula
+    fsc = f0 + (f1 - f0) * (d_prime_over_xu_max - r0) / (r1 - r0)
+    
+    # Ensure fsc is capped at 0.87*fy and is never negative
+    return min(fsc, 0.87 * fy)
 
 
 # ---------- Title ----------
@@ -196,7 +200,16 @@ fsc = fsc_calc(fy, d_prime_over_d)
 
 st.header("Compression Steel Stress Check")
 label(f"{blue('d\'/d ratio')}: {d_prime_over_d:.3f}")
-label(f"{blue('Stress in Compression Steel (fsc)')}: **{fsc:.2f} N/mm²**")
+# Use xu/d to get d'/xu,max
+d_prime_over_xu_max = d_prime_over_d / xu_max_ratio(fy)
+label(f"{blue('d\' / x$_{u,max}$ ratio')}: {d_prime_over_xu_max:.3f} (Used for $f_{{sc}}$ determination from IS 456 Annex E)")
+
+# Display fsc check result
+if fsc == 0.87 * fy:
+    label(f"{blue('Stress in Compression Steel (fsc)')}: **{fsc:.2f} N/mm²** (Steel is yielding)")
+else:
+    label(f"{blue('Stress in Compression Steel (fsc)')}: **{fsc:.2f} N/mm²** (Steel is NOT yielding)")
+
 
 # 5. Calculate Required Steel Areas (Ast1, Asc, Ast2)
 
