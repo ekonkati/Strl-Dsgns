@@ -1,8 +1,7 @@
 import math
-import numpy as np
-import pandas as pd
 import streamlit as st
 
+# Set page configuration for mobile-friendly layout
 st.set_page_config(page_title="Head 3 – Doubly Reinforced Beam Design", layout="wide")
 
 # --- CSS for Tighter Mobile/Print Layout ---
@@ -41,11 +40,6 @@ span, label {
     gap: 0.5rem; 
 }
 
-/* Tighter table/dataframe */
-.stDataFrame {
-    font-size: 0.75rem; 
-}
-
 /* Print-friendly: Ensure content is legible on A4 and hide Streamlit UI */
 @media print {
     .st-emotion-cache-6v09g0, 
@@ -76,13 +70,20 @@ def blue(s):  return f"<span style='color:{BLUE};font-weight:600'>{s}</span>"
 def red(s):   return f"**<span style='color:{RED}'>{s}</span>**"
 def label(md): st.markdown(md, unsafe_allow_html=True)
 
-# ---------- Helpers (IS 456-2000 Specific) ----------
-
 # Constants for fsc_calc (IS 456 Annex E) - Stress (fsc in N/mm²) vs d'/xu,max ratio * 100
-FSC_RATIOS = np.array([0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0]) # d'/xu,max * 100
-FY415_FSC_VALS = np.array([360.9, 360.9, 351.8, 342.8, 333.7, 324.6, 315.5, 306.4])
-FY500_FSC_VALS = np.array([434.8, 434.8, 424.4, 411.3, 395.1, 370.5, 347.5, 324.5])
+FSC_TABLE = {
+    415: {
+        0.0: 360.9, 10.0: 360.9, 20.0: 351.8, 30.0: 342.8, 
+        40.0: 333.7, 50.0: 324.6, 60.0: 315.5, 70.0: 306.4
+    },
+    500: {
+        0.0: 434.8, 10.0: 434.8, 20.0: 424.4, 30.0: 411.3, 
+        40.0: 395.1, 50.0: 370.5, 60.0: 347.5, 70.0: 324.5
+    }
+}
 
+
+# ---------- Helpers (IS 456-2000 Specific) ----------
 
 # Max xu/d ratio based on steel grade (Cl 38.1)
 def xu_max_ratio(fy):
@@ -97,38 +98,38 @@ def R_lim(fck, fy):
 
 # Stress in compression steel (fsc) in N/mm² based on fy and d'/d (IS 456 Annex E)
 def fsc_calc(fy, d_prime_over_d):
-    """Calculates fsc using interpolation from IS 456 Annex E tables."""
+    """Calculates fsc using robust interpolation from IS 456 Annex E tables."""
     
     if fy == 250:
         return 0.87 * fy
     
-    xu_d_max = xu_max_ratio(fy)
-    d_prime_over_xu_max = d_prime_over_d / xu_d_max
-    ratio_pct = d_prime_over_xu_max * 100 # Convert ratio for table lookup
-
-    if fy == 415:
-        fsc_vals = FY415_FSC_VALS
-    elif fy == 500:
-        fsc_vals = FY500_FSC_VALS
-    else:
+    if fy not in FSC_TABLE:
         # Fallback for custom fy: assume compression steel yields (conservative)
         return 0.87 * fy
 
-    # Use NumPy's interpolation-friendly search functions for robustness
-    idx = np.searchsorted(FSC_RATIOS, ratio_pct)
-
-    # Boundary checks (clamping)
-    if idx == 0: return fsc_vals[0]
-    if idx >= len(FSC_RATIOS): return fsc_vals[-1]
-
-    # Linear interpolation
-    r0, r1 = FSC_RATIOS[idx - 1], FSC_RATIOS[idx]
-    f0, f1 = fsc_vals[idx - 1], fsc_vals[idx]
+    xu_d_max = xu_max_ratio(fy)
+    d_prime_over_xu_max = d_prime_over_d / xu_d_max
+    ratio_pct = d_prime_over_xu_max * 100 
     
-    if r1 == r0: # Should not happen with this table, but safe check
-        fsc = f0 
-    else:
-        fsc = f0 + (f1 - f0) * (ratio_pct - r0) / (r1 - r0)
+    fsc_data = FSC_TABLE[fy]
+    ratios = sorted(fsc_data.keys())
+    
+    # Boundary checks
+    if ratio_pct <= ratios[0]: return fsc_data[ratios[0]]
+    if ratio_pct >= ratios[-1]: return fsc_data[ratios[-1]]
+
+    # Find the interpolation interval (simple loop)
+    idx = 0
+    for i in range(1, len(ratios)):
+        if ratios[i] > ratio_pct:
+            idx = i
+            break
+
+    r0, r1 = ratios[idx - 1], ratios[idx]
+    f0, f1 = fsc_data[r0], fsc_data[r1]
+    
+    # Linear interpolation formula
+    fsc = f0 + (f1 - f0) * (ratio_pct - r0) / (r1 - r0)
     
     # Ensure fsc is capped at 0.87*fy (yield stress)
     return min(fsc, 0.87 * fy)
