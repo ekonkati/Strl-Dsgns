@@ -212,16 +212,16 @@ Mu_lim_kNm = R_lim_val * b * d**2 / 1e6
 # 2. Check requirement and calculate Mu2
 is_doubly_required = Mu > Mu_lim_kNm
 st.markdown("---")
-# FIX: Escaped braces for M_{u, lim}
 st.info(rf"Limiting Moment $\mathbf{{M_{{u, \lim}}}}$: **{Mu_lim_kNm:.2f} kNm**")
 
 if not is_doubly_required:
-    # FIX: Escaped braces for M_{u} and M_{u, lim}
-    st.success(rf"**$\mathbf{{M_u}}$ ({Mu:.2f} kNm) $\leq$ $\mathbf{{M_{{u, \lim}}}}$ ({Mu_lim_kNm:.2f} kNm). Doubly reinforced section is {OK}. Proceed with singly reinforced design.")
+    # **CRITICAL FIX 1 (SUCCESS):** Wrap the entire formula/text in double dollar signs ($$ $$) 
+    # for robust LaTeX rendering, and simplify the Python f-string logic.
+    st.success(f"$$M_u ({Mu:.2f}\\,\\text{{kNm}}) \\le M_{{u, \\lim}} ({Mu_lim_kNm:.2f}\\,\\text{{kNm}})$$ Doubly reinforced section is {OK}. Proceed with singly reinforced design.")
     st.stop() 
 
-# FIX: Escaped braces for M_{u}, M_{u, lim}, and A_{sc}
-st.error(rf"**$\mathbf{{M_u}}$ ({Mu:.2f} kNm) $>$ $\mathbf{{M_{{u, \lim}}}}$ ({Mu_lim_kNm:.2f} kNm). Doubly reinforced section is {NOT_OK}. **(Requires $\mathbf{{A_{{sc}}}}$)**")
+# **CRITICAL FIX 2 (ERROR):** Wrap the entire formula/text in double dollar signs ($$ $$)
+st.error(f"$$M_u ({Mu:.2f}\\,\\text{{kNm}}) > M_{{u, \\lim}} ({Mu_lim_kNm:.2f}\\,\\text{{kNm}})$$ Doubly reinforced section is {NOT_OK}. **(Requires $A_{{sc}}$)**")
 st.markdown("---")
 
 # 3. Splitting the moment
@@ -229,10 +229,8 @@ Mu2_kNm = Mu - Mu_lim_kNm
 st.header("Moment Components")
 c_m1, c_m2 = st.columns(2)
 with c_m1:
-    # FIX: Escaped braces for M_{u, lim}
     st.markdown(rf"Moment resisted by concrete & $\mathbf{{A_{{st1}}}}$ ($\mathbf{{M_{{u, \lim}}}}$): {blue(f'{Mu_lim_kNm:.2f} kNm')}")
 with c_m2:
-    # FIX: Escaped braces for M_{u2}
     st.markdown(rf"Remaining moment resisted by $\mathbf{{A_{{sc}}}}$ & $\mathbf{{A_{{st2}}}}$ ($\mathbf{{M_{{u2}}}}$): {red(f'{Mu2_kNm:.2f} kNm')}")
 
 # 4. Stress in Compression Steel (fsc)
@@ -250,19 +248,15 @@ st.markdown("---")
 st.header("Required Reinforcement Areas (IS 456:2000) 🎯")
 c_ast1, c_asc, c_ast2, c_ast_total = st.columns(4)
 with c_ast1:
-    # FIX: Escaped braces for A_{st1} and M_{u, lim}
     st.markdown(r"**$\mathbf{A_{{st1}}}$ (mm²)**: (from $\mathbf{M_{{u, \lim}}}$)") 
     st.info(f"{Ast1:.2f}")
 with c_asc:
-    # FIX: Escaped braces for A_{sc}
     st.markdown(r"**$\mathbf{A_{{sc}}}$ (mm²)**: (Compression Steel)")
     st.info(f"{Asc:.2f}")
 with c_ast2:
-    # FIX: Escaped braces for A_{st2} and M_{u2}
     st.markdown(r"**$\mathbf{A_{{st2}}}$ (mm²)**: (from $\mathbf{M_{{u2}}}$)")
     st.info(f"{Ast2:.2f}")
 with c_ast_total:
-    # FIX: Escaped braces for A_{st, total}, A_{st1}, and A_{st2}
     st.markdown(r"**$\mathbf{A_{{st, total}}}$ (mm²)**: ($\mathbf{A_{{st1}}} + \mathbf{A_{{st2}}}$)")
     st.info(f"{Ast_total:.2f}")
 
