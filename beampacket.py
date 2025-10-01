@@ -256,18 +256,24 @@ st.markdown("""
 
 The design for bending moment ($M_u$) determines the required **Area of Steel ($A_{st,req}$)**. The calculation uses Limit State Design principles (as per IS 456). The provided $A_{st,prov}$ must be $\ge A_{st,req}$ for safety. The design is done separately for support (negative moment) and span (positive moment).
 """)
+
+# FIRST ROW: Labels
 c = st.columns(6)
 with c[0]: st.markdown(blue("Nos1"), unsafe_allow_html=True);
-ns1 = st.number_input("ns1", value=2, step=1, min_value=0, label_visibility="collapsed")
-with c[1]: st.markdown(blue("dia1 (mm)"), unsafe_allow_html=True); ds1 = st.selectbox("ds1", BAR_OPTIONS, index=2, label_visibility="collapsed")
+with c[1]: st.markdown(blue("dia1 (mm)"), unsafe_allow_html=True); 
 with c[2]: st.markdown(blue("Nos2"), unsafe_allow_html=True);
-ns2 = st.number_input("ns2", value=0, step=1, min_value=0, label_visibility="collapsed")
 with c[3]: st.markdown(blue("dia2 (mm)"), unsafe_allow_html=True);
-ds2 = st.selectbox("ds2", BAR_OPTIONS, index=0, label_visibility="collapsed")
 with c[4]: st.markdown(blue("Nos3 (same layer1)"), unsafe_allow_html=True);
-ns3 = st.number_input("ns3", value=0, step=1, min_value=0, label_visibility="collapsed")
 with c[5]: st.markdown(blue("dia3 (same layer1)"), unsafe_allow_html=True);
-ds3 = st.selectbox("ds3", BAR_OPTIONS, index=0, label_visibility="collapsed")
+
+# SECOND ROW: Inputs (correctly aligned under labels)
+c = st.columns(6)
+with c[0]: ns1 = st.number_input("ns1", value=2, step=1, min_value=0, label_visibility="collapsed")
+with c[1]: ds1 = st.selectbox("ds1", BAR_OPTIONS, index=2, label_visibility="collapsed")
+with c[2]: ns2 = st.number_input("ns2", value=0, step=1, min_value=0, label_visibility="collapsed")
+with c[3]: ds2 = st.selectbox("ds2", BAR_OPTIONS, index=0, label_visibility="collapsed")
+with c[4]: ns3 = st.number_input("ns3", value=0, step=1, min_value=0, label_visibility="collapsed")
+with c[5]: ds3 = st.selectbox("ds3", BAR_OPTIONS, index=0, label_visibility="collapsed")
 
 layer_info_spt, Ast_spt_prov = layer_elems(ns1,ds1,ns2,ds2, ns3,ds3)
 d_spt = d_effective_from_layers(D, clear_cover, phi_sv, layer_info_spt) or (D - (clear_cover + phi_sv + 0.5*ds1))
@@ -283,19 +289,26 @@ label(f"{blue('Ast req vs Prov (mm²)')} = {red(f'{Ast_spt:.2f}')} vs {red(f'{As
 st.markdown("---")
 
 # ---------- Reinforcement – Span ----------
+# ---------- Reinforcement – Span ----------
 st.header("Reinforcement – Span (tension face)")
+
+# FIRST ROW: Labels
 c2 = st.columns(6)
 with c2[0]: st.markdown(blue("Nos1"), unsafe_allow_html=True);
-nn1 = st.number_input("nn1", value=2, step=1, min_value=0, label_visibility="collapsed")
-with c2[1]: st.markdown(blue("dia1 (mm)"), unsafe_allow_html=True); dn1 = st.selectbox("dn1", BAR_OPTIONS, index=2, label_visibility="collapsed")
+with c2[1]: st.markdown(blue("dia1 (mm)"), unsafe_allow_html=True); 
 with c2[2]: st.markdown(blue("Nos2"), unsafe_allow_html=True);
-nn2 = st.number_input("nn2", value=0, step=1, min_value=0, label_visibility="collapsed")
 with c2[3]: st.markdown(blue("dia2 (mm)"), unsafe_allow_html=True);
-dn2 = st.selectbox("dn2", BAR_OPTIONS, index=0, label_visibility="collapsed")
 with c2[4]: st.markdown(blue("Nos3 (same layer1)"), unsafe_allow_html=True);
-nn3 = st.number_input("nn3", value=0, step=1, min_value=0, label_visibility="collapsed")
 with c2[5]: st.markdown(blue("dia3 (same layer1)"), unsafe_allow_html=True);
-dn3 = st.selectbox("dn3", BAR_OPTIONS, index=0, label_visibility="collapsed")
+
+# SECOND ROW: Inputs (correctly aligned under labels)
+c2 = st.columns(6)
+with c2[0]: nn1 = st.number_input("nn1", value=2, step=1, min_value=0, label_visibility="collapsed")
+with c2[1]: dn1 = st.selectbox("dn1", BAR_OPTIONS, index=2, label_visibility="collapsed")
+with c2[2]: nn2 = st.number_input("nn2", value=0, step=1, min_value=0, label_visibility="collapsed")
+with c2[3]: dn2 = st.selectbox("dn2", BAR_OPTIONS, index=0, label_visibility="collapsed")
+with c2[4]: nn3 = st.number_input("nn3", value=0, step=1, min_value=0, label_visibility="collapsed")
+with c2[5]: dn3 = st.selectbox("dn3", BAR_OPTIONS, index=0, label_visibility="collapsed")
 
 layer_info_span, Ast_span_prov = layer_elems(nn1,dn1,nn2,dn2, nn3,dn3)
 d_span = d_effective_from_layers(D, clear_cover, phi_sv, layer_info_span) or (D - (clear_cover + phi_sv + 0.5*dn1))
