@@ -2,7 +2,7 @@ import math
 import streamlit as st
 
 # Set page configuration for mobile-friendly layout
-st.set_page_config(page_title="Head 3 – Doubly Reinforced Beam Design (Full Checks)", layout="wide")
+st.set_page_config(page_title="Item 3 – Doubly Reinforced Beam Design (Full Checks)", layout="wide")
 
 # ====================================================================
 # *** CONSTANTS AND DATA TABLES (DEFINED AT THE TOP FOR STABILITY) ***
@@ -103,7 +103,7 @@ def calculate_tau_c(fck, pt):
     tau_c = t0 + (t1 - t0) * (pt - p0) / (p1 - p0)
     return tau_c
 
-# --- CSS (omitted for brevity) ---
+# --- CSS for Tighter Mobile/Print Layout ---
 st.markdown(r"""
 <style>
 /* Overall reduction in spacing (padding and margin) for mobile/A4 */
@@ -259,12 +259,13 @@ with c_ast_total:
 
 
 # ====================================================================
-# *** DESIGN CHECKS (Missing Items Incorporated) ***
+# *** DESIGN CHECKS ***
 # ====================================================================
 st.markdown("---")
 st.header("Design Checks (IS 456:2000) ✅")
 
 # Assume Overall Depth D for Max Steel Check (D = d + d_prime)
+# NOTE: If D is an input, use that value instead. Here we approximate D.
 D = d + d_prime 
 
 # --- 1. Minimum and Maximum Area Checks ---
@@ -340,8 +341,7 @@ with c_d1:
     st.markdown(blue("Basic L/d Ratio (Table 15)"))
     label(f"**{basic_ld}** ({beam_type})")
 
-# Calculate Modification Factor for Tension Steel (Mf_t) - Simplified approach
-# The actual calculation for f_s requires knowing Ast_provided. Using Ast_total as a proxy for Ast_prov.
+# Calculate Modification Factor for Tension Steel (Mf_t) - Simplified approach (Fig 4)
 fs = 0.58 * fy 
 Mf_t = 0.55 + (477 - fs) / (120 * (0.9 + Ast_total * 100 / (b * d))) 
 if Mf_t > 2.0: Mf_t = 2.0
@@ -356,9 +356,10 @@ actual_ld = L / d
 
 with c_d2:
     st.markdown(blue("Permitted L/d Ratio"))
-    label(r"Basic $\times M_{f,t} \cdot M_{f,c} = {:.0f} \cdot {:.2f} \cdot {:.2f} = \mathbf{{ {:.2f} }}$".format(basic_ld, Mf_t, Mf_c, permitted_ld))
+    # FIX: Corrected using f-string and escaped LaTeX braces.
+    label(f"Basic $\\times M_{{f,t}} \\cdot M_{{f,c}} = {basic_ld:.0f} \\cdot {Mf_t:.2f} \\cdot {Mf_c:.2f} = \\mathbf{{ {permitted_ld:.2f} }}$")
     
 # Final Check
 result_deflection = actual_ld <= permitted_ld
-st.markdown(f"**Actual L/d ({actual_ld:.2f}) $\mathbf{{\\leq}}$ Permitted L/d ({permitted_ld:.2f})**")
+st.markdown(f"**Actual L/d ({actual_ld:.2f}) $\\mathbf{{\\leq}}$ Permitted L/d ({permitted_ld:.2f})**")
 st.markdown(f"**Deflection Check Result**: {OK if result_deflection else NOT_OK}")
