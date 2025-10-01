@@ -90,7 +90,7 @@ def xu_max_ratio(fy):
 
 def mu_lim_kNm(fck, fy, b, d):
     xu = xu_max_ratio(fy) * d
-    [cite_start]return 0.36 * fck * b * xu * (d - 0.42 * xu) / 1e6  # kNm [cite: 2]
+    return 0.36 * fck * b * xu * (d - 0.42 * xu) / 1e6  # kNm
 
 def ast_singly_for_Mu(Mu_kNm, fck, fy, b, d):
     Mu = Mu_kNm * 1e6
