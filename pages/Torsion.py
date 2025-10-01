@@ -269,7 +269,7 @@ with c_s_user:
     s_user = st.number_input("s_user", value=150, min_value=25, step=5, label_visibility="collapsed")
 
 # ----------------------------------------------------
-# MOVED: Longitudinal Bar Configuration (must come BEFORE s_max calculation)
+# Longitudinal Bar Configuration (must come BEFORE s_max calculation)
 # ----------------------------------------------------
 st.markdown("##### Longitudinal Bar Configuration (for Spacing Check)")
 c_dim = st.columns(2)
@@ -287,7 +287,7 @@ Vus_user_N = Vus_req * 1e3 # Convert Vus_req to N
 # Calculate required spacing based on Vus_req
 s_demand = (0.87 * fy_sv_val * Asv * d) / Vus_user_N if Vus_user_N > 1e-9 else 1e9
 
-# Check Spacing Limits (Cl 41.4.3)
+# Check Spacing Limits (Cl 41.4.3 and Cl 26.5.1.5)
 s_max_41 = min(x1, y1) / 4.0 + (D / 10.0)
 s_max_code_cl_26 = min(0.75 * d, 300.0)
 s_max_ctrl = min(s_max_41, s_max_code_cl_26, x1) # Cl 41.4.3 (c) limits spacing to min(s_max_41, x1, 300)
@@ -310,5 +310,8 @@ items.append(("Stirrups Spacing", f"≤ {min(s_demand, s_max_ctrl):.0f} mm", f"{
 
 df = pd.DataFrame([{"Check": n, "Required/Limit": r, "Provided/Actual": p, "OK": "Yes" if ok else "No"} for (n,r,p,ok) in items])
 st.dataframe(df, hide_index=True, use_container_width=True)
-overall = all(ok for (_,_,_,ok) in items if n != "Equivalent Moment Me1" and n != "Equivalent Moment Me2")
+
+# CORRECTED LOGIC: Unpack tuple (n, r, p, ok)
+overall = all(ok for (n, r, p, ok) in items if n != "Equivalent Moment Me1" and n != "Equivalent Moment Me2")
+
 st.success("Overall: PASS ✅" if overall else "Overall: CHECK ❌")
