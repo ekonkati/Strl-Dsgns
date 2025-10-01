@@ -98,7 +98,10 @@ def ast_singly_for_Mu(Mu_kNm, fck, fy, b, d):
     Ast = Mu / (0.87 * fy * jd) if jd > 0 else float('nan')
     if Ast <= 0 or math.isnan(Ast):
         return float('nan'), float('nan'), float('nan'), mu_lim_kNm(fck, fy, b, d)
-    [cite_start]xu_try = (0.87 * fy * Ast) / (0.36 * fck * b) [cite: 3]
+    
+    # Corrected line 101: removed citation markers
+    xu_try = (0.87 * fy * Ast) / (0.36 * fck * b)
+    
     jd = d * (1 - 0.42 * (xu_try / d))
     if jd <= 0: jd = 0.9 * d
     Ast = Mu / (0.87 * fy * jd)
