@@ -70,18 +70,6 @@ def blue(s):  return f"<span style='color:{BLUE};font-weight:600'>{s}</span>"
 def red(s):   return f"**<span style='color:{RED}'>{s}</span>**"
 def label(md): st.markdown(md, unsafe_allow_html=True)
 
-# Constants for fsc_calc (IS 456 Annex E) - Stress (fsc in N/mm²) vs d'/xu,max ratio * 100
-FSC_TABLE = {
-    415: {
-        0.0: 360.9, 10.0: 360.9, 20.0: 351.8, 30.0: 342.8, 
-        40.0: 333.7, 50.0: 324.6, 60.0: 315.5, 70.0: 306.4
-    },
-    500: {
-        0.0: 434.8, 10.0: 434.8, 20.0: 424.4, 30.0: 411.3, 
-        40.0: 395.1, 50.0: 370.5, 60.0: 347.5, 70.0: 324.5
-    }
-}
-
 
 # ---------- Helpers (IS 456-2000 Specific) ----------
 
@@ -98,27 +86,30 @@ def R_lim(fck, fy):
 
 # Stress in compression steel (fsc) in N/mm² based on fy and d'/d (IS 456 Annex E)
 def fsc_calc(fy, d_prime_over_d):
-    """Calculates fsc using robust interpolation from IS 456 Annex E tables."""
+    """Calculates fsc using robust, basic Python interpolation."""
     
     if fy == 250:
         return 0.87 * fy
+
+    # Data is directly embedded as simple lists/tuples (d'/xu,max * 100)
+    ratios = [0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0] 
     
-    if fy not in FSC_TABLE:
-        # Fallback for custom fy: assume compression steel yields (conservative)
+    if fy == 415:
+        fsc_vals = [360.9, 360.9, 351.8, 342.8, 333.7, 324.6, 315.5, 306.4]
+    elif fy == 500:
+        fsc_vals = [434.8, 434.8, 424.4, 411.3, 395.1, 370.5, 347.5, 324.5]
+    else:
         return 0.87 * fy
 
     xu_d_max = xu_max_ratio(fy)
     d_prime_over_xu_max = d_prime_over_d / xu_d_max
     ratio_pct = d_prime_over_xu_max * 100 
-    
-    fsc_data = FSC_TABLE[fy]
-    ratios = sorted(fsc_data.keys())
-    
-    # Boundary checks
-    if ratio_pct <= ratios[0]: return fsc_data[ratios[0]]
-    if ratio_pct >= ratios[-1]: return fsc_data[ratios[-1]]
 
-    # Find the interpolation interval (simple loop)
+    # Boundary checks
+    if ratio_pct <= ratios[0]: return fsc_vals[0]
+    if ratio_pct >= ratios[-1]: return fsc_vals[-1]
+
+    # Find the interpolation interval using simple index search
     idx = 0
     for i in range(1, len(ratios)):
         if ratios[i] > ratio_pct:
@@ -126,12 +117,11 @@ def fsc_calc(fy, d_prime_over_d):
             break
 
     r0, r1 = ratios[idx - 1], ratios[idx]
-    f0, f1 = fsc_data[r0], fsc_data[r1]
+    f0, f1 = fsc_vals[idx - 1], fsc_vals[idx]
     
     # Linear interpolation formula
     fsc = f0 + (f1 - f0) * (ratio_pct - r0) / (r1 - r0)
     
-    # Ensure fsc is capped at 0.87*fy (yield stress)
     return min(fsc, 0.87 * fy)
 
 
