@@ -20,7 +20,8 @@ FSC_RATIOS = [0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0]
 FY415_FSC_VALS = [360.9, 360.9, 351.8, 342.8, 333.7, 324.6, 315.5, 306.4]
 FY500_FSC_VALS = [434.8, 434.8, 424.4, 411.3, 395.1, 370.5, 347.5, 324.5]
 
-# IS 456 Table 19: Design Shear Strength of Concrete, τc (for pt values 0.25, 0.50, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.50, 2.75, 3.0)
+# IS 456 Table 19: Design Shear Strength of Concrete, τc 
+PT_VALS = [0.25, 0.50, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.50, 2.75, 3.0]
 TC_TABLE = {
     20: [0.36, 0.48, 0.56, 0.62, 0.67, 0.71, 0.75, 0.78, 0.81, 0.82, 0.82, 0.82],
     25: [0.37, 0.51, 0.60, 0.67, 0.73, 0.79, 0.84, 0.88, 0.91, 0.94, 0.96, 0.98],
@@ -28,6 +29,9 @@ TC_TABLE = {
     35: [0.37, 0.55, 0.66, 0.74, 0.81, 0.88, 0.93, 0.97, 1.01, 1.04, 1.06, 1.08],
     40: [0.37, 0.56, 0.68, 0.76, 0.84, 0.90, 0.96, 1.01, 1.05, 1.08, 1.10, 1.12],
 }
+
+# IS 456 Table 20: Maximum Shear Stress (τc,max)
+TAU_C_MAX_VALS = {20: 2.8, 25: 3.1, 30: 3.5, 35: 3.7, 40: 4.0}
 
 
 # ====================================================================
@@ -80,38 +84,78 @@ def fsc_calc(fy, d_prime_over_d):
 
 def calculate_tau_c(fck, pt):
     """Interpolates the design shear strength tau_c from IS 456 Table 19."""
-    if fck not in TC_TABLE: return 0.0 # Should not happen for standard grades
+    if fck not in TC_TABLE: return 0.0 
 
-    pt_values = [0.25, 0.50, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.50, 2.75, 3.0]
     tc_values = TC_TABLE[fck]
     
-    if pt <= pt_values[0]: return tc_values[0]
-    if pt >= pt_values[-1]: return tc_values[-1]
+    if pt <= PT_VALS[0]: return tc_values[0]
+    if pt >= PT_VALS[-1]: return tc_values[-1]
 
     idx = 0
-    for i in range(1, len(pt_values)):
-        if pt_values[i] > pt:
+    for i in range(1, len(PT_VALS)):
+        if PT_VALS[i] > pt:
             idx = i
             break
     
-    p0, p1 = pt_values[idx - 1], pt_values[idx]
+    p0, p1 = PT_VALS[idx - 1], PT_VALS[idx]
     t0, t1 = tc_values[idx - 1], tc_values[idx]
     
     tau_c = t0 + (t1 - t0) * (pt - p0) / (p1 - p0)
     return tau_c
 
+# --- CSS (omitted for brevity) ---
+st.markdown(r"""
+<style>
+/* Overall reduction in spacing (padding and margin) for mobile/A4 */
+.st-emotion-cache-18ni7ap, 
+.st-emotion-cache-1wb9b6h { 
+    padding-left: 0.5rem !important;
+    padding-right: 0.5rem !important;
+}
+/* Smaller font size for markdown headers and labels */
+h1, h2, h3, h4, .stMarkdown, .st-emotion-cache-vdhr9j {
+    font-size: 0.9rem; 
+    line-height: 1.2;
+}
+/* Tighter text and smaller fonts for labels/results */
+span, label {
+    font-size: 0.8rem !important;
+}
+/* Smaller selectboxes and number inputs */
+.stSelectbox, .stNumberInput {
+    height: 30px; 
+}
+.stSelectbox>div>div, .stNumberInput>div>div>input {
+    min-height: 30px !important;
+    padding: 2px 5px !important; 
+    font-size: 0.8rem !important;
+}
+/* Tighter columns (less spacing between elements) */
+.st-emotion-cache-p2n2mc, .st-emotion-cache-16ya12x { 
+    gap: 0.5rem; 
+}
+/* Print-friendly: Ensure content is legible on A4 and hide Streamlit UI */
+@media print {
+    .st-emotion-cache-6v09g0, 
+    .st-emotion-cache-1avcm0d {
+        display: none !important;
+    }
+    .st-emotion-cache-1vq4p4c {
+        max-width: 100% !important;
+    }
+    body {
+        -webkit-print-color-adjust: exact;
+        background-color: white !important;
+        color: black !important;
+    }
+}
+</style>
+""", unsafe_allow_html=True)
+
 
 # ====================================================================
 # *** STREAMLIT APP LAYOUT & CORE LOGIC ***
 # ====================================================================
-
-# --- CSS (omitted for brevity) ---
-st.markdown("""
-<style>
-/* ... (CSS block identical to previous version) ... */
-</style>
-""", unsafe_allow_html=True)
-
 
 # ---------- Title ----------
 default_title = "Item 3: Design of Doubly Reinforced Beam (IS 456:2000) - Full Checks"
@@ -160,16 +204,14 @@ with c_type:
     st.markdown(blue("Support Type"), unsafe_allow_html=True)
     beam_type = st.selectbox("beam_type", ["Simply Supported", "Continuous"], index=1)
 
-st.markdown("---")
-
 # --- CORE DOUBLY REINFORCED CALCULATIONS ---
-
 # 1. Calculate Mu,lim
 R_lim_val = R_lim(fck, fy)
 Mu_lim_kNm = R_lim_val * b * d**2 / 1e6
 
 # 2. Check requirement and calculate Mu2
 is_doubly_required = Mu > Mu_lim_kNm
+st.markdown("---")
 st.info(rf"Limiting Moment $\mathbf{{M_{{u, \lim}}}}$: **{Mu_lim_kNm:.2f} kNm**")
 
 if not is_doubly_required:
@@ -215,11 +257,15 @@ with c_ast_total:
     st.markdown(r"**$\mathbf{A_{st, total}}$ (mm²)**: ($\mathbf{A}_{st1} + \mathbf{A}_{st2}$)")
     st.info(f"{Ast_total:.2f}")
 
+
 # ====================================================================
-# *** DESIGN CHECKS (Missing Items) ***
+# *** DESIGN CHECKS (Missing Items Incorporated) ***
 # ====================================================================
 st.markdown("---")
 st.header("Design Checks (IS 456:2000) ✅")
+
+# Assume Overall Depth D for Max Steel Check (D = d + d_prime)
+D = d + d_prime 
 
 # --- 1. Minimum and Maximum Area Checks ---
 st.subheader("1. Area of Steel Limits (Cl 26.5.1)")
@@ -229,23 +275,23 @@ c_a1, c_a2, c_a3 = st.columns(3)
 Ast_min = (0.85 * b * d) / fy
 with c_a1:
     st.markdown(blue("Min $A_{st}$"))
-    label(f"**{Ast_min:.2f} mm²** ($\geq 0.85 \cdot b \cdot d / f_y$)")
+    label(r"**{:.2f} mm²** ($\geq 0.85 \cdot b \cdot d / f_y$)".format(Ast_min))
     result_min = Ast_total >= Ast_min
     st.markdown(f"**Result**: {OK if result_min else NOT_OK}")
 
 # Maximum Tension Steel (Cl 26.5.1.1)
-Ast_max = 0.04 * b * d
+Ast_max = 0.04 * b * D # Use Overall Depth D
 with c_a2:
     st.markdown(blue("Max $A_{st}$"))
-    label(f"**{Ast_max:.2f} mm²** ($\leq 0.04 \cdot b \cdot D$)")
+    label(r"**{:.2f} mm²** ($\leq 0.04 \cdot b \cdot D$)".format(Ast_max))
     result_max_t = Ast_total <= Ast_max
     st.markdown(f"**Result**: {OK if result_max_t else NOT_OK}")
 
 # Maximum Compression Steel (Cl 26.5.1.2)
-Asc_max = 0.04 * b * d
+Asc_max = 0.04 * b * D # Use Overall Depth D
 with c_a3:
     st.markdown(blue("Max $A_{sc}$"))
-    label(f"**{Asc_max:.2f} mm²** ($\leq 0.04 \cdot b \cdot D$)")
+    label(r"**{:.2f} mm²** ($\leq 0.04 \cdot b \cdot D$)".format(Asc_max))
     result_max_c = Asc <= Asc_max
     st.markdown(f"**Result**: {OK if result_max_c else NOT_OK}")
 
@@ -267,8 +313,7 @@ with c_s2:
     label(f"For $\mathbf{{p_t={pt:.3f}\%}}$: **{tau_c:.3f} N/mm²**")
 
 # Maximum Shear Stress (τc,max)
-tau_c_max_vals = {20: 2.8, 25: 3.1, 30: 3.5, 35: 3.7, 40: 4.0}
-tau_c_max = tau_c_max_vals.get(fck, 2.8)
+tau_c_max = TAU_C_MAX_VALS.get(fck, 2.8)
 with c_s3:
     st.markdown(blue("Maximum Shear $\\tau_{c, max}$ (Table 20)"))
     label(f"**{tau_c_max:.1f} N/mm²**")
@@ -276,7 +321,6 @@ with c_s3:
     # Check 1: τv vs τc,max
     result_max_shear = tau_v <= tau_c_max
     st.markdown(f"**$\mathbf{{\\tau_v}} \leq \mathbf{{\\tau_{{c, max}}}}$**: {OK if result_max_shear else NOT_OK}")
-
 
 # Shear Reinforcement Decision (Cl 40.3)
 if tau_v <= tau_c:
@@ -296,15 +340,15 @@ with c_d1:
     st.markdown(blue("Basic L/d Ratio (Table 15)"))
     label(f"**{basic_ld}** ({beam_type})")
 
-# Calculate Modification Factor for Tension Steel (Mf_t) - Simplified
-# fs = 0.58 * fy * (Ast_req / Ast_prov). Here Ast_prov is Ast_total
+# Calculate Modification Factor for Tension Steel (Mf_t) - Simplified approach
+# The actual calculation for f_s requires knowing Ast_provided. Using Ast_total as a proxy for Ast_prov.
 fs = 0.58 * fy 
-Mf_t = 0.55 + (477 - fs) / (120 * (0.9 + Ast_total * 100 / (b * d))) # Use Ast_total as Ast_prov for simplicity
+Mf_t = 0.55 + (477 - fs) / (120 * (0.9 + Ast_total * 100 / (b * d))) 
 if Mf_t > 2.0: Mf_t = 2.0
 
-# Calculate Modification Factor for Compression Steel (Mf_c) - Simplified
+# Calculate Modification Factor for Compression Steel (Mf_c) - Simplified approach (Fig 5)
 pc = Asc * 100 / (b * d)
-Mf_c = 1.0 + (pc / 100) / (0.36 + 20 * d_prime / d) # Simplified approach from Fig 5
+Mf_c = 1.0 + (pc / 100) / (0.36 + 20 * d_prime / d) 
 if Mf_c > 1.5: Mf_c = 1.5
 
 permitted_ld = basic_ld * Mf_t * Mf_c
@@ -312,7 +356,7 @@ actual_ld = L / d
 
 with c_d2:
     st.markdown(blue("Permitted L/d Ratio"))
-    label(f"Basic $\\times M_{{f,t}} \cdot M_{{f,c}} = {basic_ld} \cdot {Mf_t:.2f} \cdot {Mf_c:.2f} = \mathbf{{ {permitted_ld:.2f} }}$")
+    label(r"Basic $\times M_{f,t} \cdot M_{f,c} = {:.0f} \cdot {:.2f} \cdot {:.2f} = \mathbf{{ {:.2f} }}$".format(basic_ld, Mf_t, Mf_c, permitted_ld))
     
 # Final Check
 result_deflection = actual_ld <= permitted_ld
