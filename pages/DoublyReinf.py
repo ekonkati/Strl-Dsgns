@@ -79,14 +79,9 @@ def label(md): st.markdown(md, unsafe_allow_html=True)
 # ---------- Helpers (IS 456-2000 Specific) ----------
 
 # Constants for fsc_calc (IS 456 Annex E) - Stress (fsc in N/mm²) vs d'/xu,max ratio * 100
-FY415_FSC_TABLE = {
-    0.0: 360.9, 10.0: 360.9, 20.0: 351.8, 30.0: 342.8, 
-    40.0: 333.7, 50.0: 324.6, 60.0: 315.5, 70.0: 306.4
-}
-FY500_FSC_TABLE = {
-    0.0: 434.8, 10.0: 434.8, 20.0: 424.4, 30.0: 411.3, 
-    40.0: 395.1, 50.0: 370.5, 60.0: 347.5, 70.0: 324.5
-}
+FSC_RATIOS = np.array([0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0]) # d'/xu,max * 100
+FY415_FSC_VALS = np.array([360.9, 360.9, 351.8, 342.8, 333.7, 324.6, 315.5, 306.4])
+FY500_FSC_VALS = np.array([434.8, 434.8, 424.4, 411.3, 395.1, 370.5, 347.5, 324.5])
 
 
 # Max xu/d ratio based on steel grade (Cl 38.1)
@@ -95,7 +90,7 @@ def xu_max_ratio(fy):
     if fy <= 415: return 0.48
     return 0.46
 
-# Limiting moment coefficient (0.36 fck (xu/d) * (1 - 0.42 xu/d)) * b*d^2
+# Limiting moment coefficient 
 def R_lim(fck, fy):
     xu_d = xu_max_ratio(fy)
     return 0.36 * fck * xu_d * (1 - 0.42 * xu_d)
@@ -109,32 +104,33 @@ def fsc_calc(fy, d_prime_over_d):
     
     xu_d_max = xu_max_ratio(fy)
     d_prime_over_xu_max = d_prime_over_d / xu_d_max
-    ratio_pct = d_prime_over_xu_max * 100 # Convert ratio for easy table lookup
-    
+    ratio_pct = d_prime_over_xu_max * 100 # Convert ratio for table lookup
+
     if fy == 415:
-        fsc_table = FY415_FSC_TABLE
+        fsc_vals = FY415_FSC_VALS
     elif fy == 500:
-        fsc_table = FY500_FSC_TABLE
+        fsc_vals = FY500_FSC_VALS
     else:
         # Fallback for custom fy: assume compression steel yields (conservative)
         return 0.87 * fy
 
-    ratios = sorted(fsc_table.keys())
-    fsc_vals = [fsc_table[r] for r in ratios]
-    
-    # Boundary checks
-    if ratio_pct <= ratios[0]: return fsc_vals[0]
-    if ratio_pct >= ratios[-1]: return fsc_vals[-1]
+    # Use NumPy's interpolation-friendly search functions for robustness
+    idx = np.searchsorted(FSC_RATIOS, ratio_pct)
 
-    # Find the interpolation interval
-    idx = next(i for i, r in enumerate(ratios) if r > ratio_pct)
-    
-    r0, r1 = ratios[idx - 1], ratios[idx]
+    # Boundary checks (clamping)
+    if idx == 0: return fsc_vals[0]
+    if idx >= len(FSC_RATIOS): return fsc_vals[-1]
+
+    # Linear interpolation
+    r0, r1 = FSC_RATIOS[idx - 1], FSC_RATIOS[idx]
     f0, f1 = fsc_vals[idx - 1], fsc_vals[idx]
     
-    # Linear interpolation formula
-    fsc = f0 + (f1 - f0) * (ratio_pct - r0) / (r1 - r0)
+    if r1 == r0: # Should not happen with this table, but safe check
+        fsc = f0 
+    else:
+        fsc = f0 + (f1 - f0) * (ratio_pct - r0) / (r1 - r0)
     
+    # Ensure fsc is capped at 0.87*fy (yield stress)
     return min(fsc, 0.87 * fy)
 
 
@@ -216,7 +212,7 @@ d_prime_over_xu_max = d_prime_over_d / xu_max_ratio(fy)
 label(f"{blue('d\' / x$_{u,max}$ ratio')}: {d_prime_over_xu_max:.3f} (Used for $f_{{sc}}$ determination from IS 456 Annex E)")
 
 # Display fsc check result
-if fsc == 0.87 * fy:
+if fsc >= 0.87 * fy - 1e-3: # Check for yielding within a small tolerance
     label(f"{blue('Stress in Compression Steel (fsc)')}: **{fsc:.2f} N/mm²** (Steel is yielding)")
 else:
     label(f"{blue('Stress in Compression Steel (fsc)')}: **{fsc:.2f} N/mm²** (Steel is NOT yielding)")
