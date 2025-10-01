@@ -40,7 +40,7 @@ TAU_C_MAX_VALS = {20: 2.8, 25: 3.1, 30: 3.5, 35: 3.7, 40: 4.0}
 
 def blue(s):  return f"<span style='color:{BLUE};font-weight:600'>{s}</span>"
 def red(s):   return f"**<span style='color:{RED}'>{s}</span>**"
-def label(md): st.markdown(md, unsafe_allow_html=True) # Retained but avoided for MathJax lines
+def label(md): st.markdown(md, unsafe_allow_html=True) 
 
 # Max xu/d ratio based on steel grade (Cl 38.1)
 def xu_max_ratio(fy):
@@ -284,8 +284,8 @@ c_a1, c_a2, c_a3 = st.columns(3)
 Ast_min = (0.85 * b * d) / fy
 with c_a1:
     st.markdown(blue("Min $A_{{st}}$"))
-    # FIX: Removed the label function and explicitly wrapped the LaTeX portion in $ $
-    st.markdown(rf"**{Ast_min:.2f} mm²** ($\$ \geq 0.85 \\cdot b \\cdot d / f_y \$ $)") 
+    # FIX: Four backslashes (\\\\) for \ge and \cdot, explicitly wrapped in $ $
+    st.markdown(f"**{Ast_min:.2f} mm²** ($\$ \\\\ge 0.85 \\\\cdot b \\\\cdot d / f_y \$ $)") 
     result_min = Ast_total >= Ast_min
     st.markdown(f"**Result**: {OK if result_min else NOT_OK}")
 
@@ -293,8 +293,8 @@ with c_a1:
 Ast_max = 0.04 * b * D # Use Overall Depth D
 with c_a2:
     st.markdown(blue("Max $A_{{st}}$"))
-    # FIX: Removed the label function and explicitly wrapped the LaTeX portion in $ $
-    st.markdown(rf"**{Ast_max:.2f} mm²** ($\$ \leq 0.04 \\cdot b \\cdot D \$ $)")
+    # FIX: Four backslashes (\\\\) for \le and \cdot, explicitly wrapped in $ $
+    st.markdown(f"**{Ast_max:.2f} mm²** ($\$ \\\\le 0.04 \\\\cdot b \\\\cdot D \$ $)")
     result_max_t = Ast_total <= Ast_max
     st.markdown(f"**Result**: {OK if result_max_t else NOT_OK}")
 
@@ -302,8 +302,8 @@ with c_a2:
 Asc_max = 0.04 * b * D # Use Overall Depth D
 with c_a3:
     st.markdown(blue("Max $A_{{sc}}$"))
-    # FIX: Removed the label function and explicitly wrapped the LaTeX portion in $ $
-    st.markdown(rf"**{Asc_max:.2f} mm²** ($\$ \leq 0.04 \\cdot b \\cdot D \$ $)")
+    # FIX: Four backslashes (\\\\) for \le and \cdot, explicitly wrapped in $ $
+    st.markdown(f"**{Asc_max:.2f} mm²** ($\$ \\\\le 0.04 \\\\cdot b \\\\cdot D \$ $)")
     result_max_c = Asc <= Asc_max
     st.markdown(f"**Result**: {OK if result_max_c else NOT_OK}")
 
@@ -314,38 +314,38 @@ c_s1, c_s2, c_s3 = st.columns(3)
 # Nominal Shear Stress (τv)
 tau_v = Vu * 1000 / (b * d)
 with c_s1:
-    # FIX: Used $\tau_v$ with double backslash
+    # FIX: Four backslashes (\\\\) for \tau_v, \cdot, and explicit $ $ wrapping
     st.markdown(blue("Nominal Shear Stress $\\tau_v$"))
-    st.markdown(f"**{tau_v:.3f} N/mm²** ($\$ \\tau_v = V_u / (b \\cdot d) \$ $)")
+    st.markdown(f"**{tau_v:.3f} N/mm²** ($\$ \\\\tau_v = V_u / (b \\\\cdot d) \$ $)")
 
 # Design Shear Strength (τc)
 pt = (Ast_total * 100) / (b * d)
 tau_c = calculate_tau_c(fck, pt)
 with c_s2:
-    # FIX: Used $\tau_c$ with double backslash
+    # FIX: Four backslashes (\\\\) for \tau_c
     st.markdown(blue("Design Shear Strength $\\tau_c$ (Table 19)"))
     st.markdown(f"For $\\mathbf{{p_t={pt:.3f}\\%}}$: **{tau_c:.3f} N/mm²**") 
 
 # Maximum Shear Stress (τc,max)
 tau_c_max = TAU_C_MAX_VALS.get(fck, 2.8)
 with c_s3:
-    # FIX: Used $\tau_{c, max}$ with double backslash
+    # FIX: Four backslashes (\\\\) for \tau_{c, max}
     st.markdown(blue("Maximum Shear $\\tau_{{c, max}}$ (Table 20)"))
     st.markdown(f"**{tau_c_max:.1f} N/mm²**")
     
     # Check 1: τv vs τc,max
     result_max_shear = tau_v <= tau_c_max
     # FIX: Explicit $ $ wrapping for the critical comparison
-    st.markdown(f"**$\\mathbf{{\\tau_v}} \\le \\mathbf{{\\tau_{{c, max}}}}$**: {OK if result_max_shear else NOT_OK}")
+    st.markdown(f"**$\\\\mathbf{{\\tau_v}} \\\\le \\\\mathbf{{\\tau_{{c, max}}}}$**: {OK if result_max_shear else NOT_OK}")
 
 # Shear Reinforcement Decision (Cl 40.3)
 if tau_v <= tau_c:
     # FIX: Explicit $ $ wrapping for the critical comparison
-    st.success(f"**$\\mathbf{{\\tau_v}}$ ({tau_v:.3f}) $\\le \\mathbf{{\\tau_c}}$ ({tau_c:.3f})**. Nominal shear reinforcement only (Cl 40.3).")
+    st.success(f"**$\\\\mathbf{{\\tau_v}}$ ({tau_v:.3f}) $\\\\le \\\\mathbf{{\\tau_c}}$ ({tau_c:.3f})**. Nominal shear reinforcement only (Cl 40.3).")
 else:
     Vs_req = (tau_v - tau_c) * b * d / 1000
     # FIX: Explicit $ $ wrapping for the critical comparison and result
-    st.warning(f"**$\\mathbf{{\\tau_v}}$ ({tau_v:.3f}) $>\\mathbf{{\\tau_c}}$ ({tau_c:.3f})**. Shear reinforcement is **required**. $\\mathbf{{V_s}} = \\mathbf{{ {Vs_req:.2f} kN}}$")
+    st.warning(f"**$\\\\mathbf{{\\tau_v}}$ ({tau_v:.3f}) $>\\\\mathbf{{\\tau_c}}$ ({tau_c:.3f})**. Shear reinforcement is **required**. $\\\\mathbf{{V_s}} = \\\\mathbf{{ {Vs_req:.2f} kN}}$")
 
 
 # --- 3. Deflection Control Check ---
@@ -373,8 +373,8 @@ actual_ld = L / d
 
 with c_d2:
     st.markdown(blue("Permitted L/d Ratio"))
-    # FIX: Used single-dollar wrapping and double backslashes
-    st.markdown(f"Basic $\\times M_{{f,t}} \\cdot M_{{f,c}} = {basic_ld:.0f} \\cdot {Mf_t:.2f} \\cdot {Mf_c:.2f} = \\mathbf{{ {permitted_ld:.2f} }}$")
+    # FIX: Four backslashes (\\\\) for \cdot and $ $ wrapping.
+    st.markdown(f"Basic $\\times M_{{f,t}} \\\\cdot M_{{f,c}} = {basic_ld:.0f} \\\\cdot {Mf_t:.2f} \\\\cdot {Mf_c:.2f} = \\mathbf{{ {permitted_ld:.2f} }}$")
     
 # Final Check
 result_deflection = actual_ld <= permitted_ld
