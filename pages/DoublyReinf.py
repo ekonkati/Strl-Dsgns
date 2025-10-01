@@ -212,13 +212,16 @@ Mu_lim_kNm = R_lim_val * b * d**2 / 1e6
 # 2. Check requirement and calculate Mu2
 is_doubly_required = Mu > Mu_lim_kNm
 st.markdown("---")
+# FIX: Escaped braces for M_{u, lim}
 st.info(rf"Limiting Moment $\mathbf{{M_{{u, \lim}}}}$: **{Mu_lim_kNm:.2f} kNm**")
 
 if not is_doubly_required:
+    # FIX: Escaped braces for M_{u} and M_{u, lim}
     st.success(rf"**$\mathbf{{M_u}}$ ({Mu:.2f} kNm) $\leq$ $\mathbf{{M_{{u, \lim}}}}$ ({Mu_lim_kNm:.2f} kNm). Doubly reinforced section is {OK}. Proceed with singly reinforced design.")
     st.stop() 
 
-st.error(rf"**$\mathbf{{M_u}}$ ({Mu:.2f} kNm) $>$ $\mathbf{{M_{{u, \lim}}}}$ ({Mu_lim_kNm:.2f} kNm). Doubly reinforced section is {NOT_OK}. **(Requires $A_{{sc}}$)**")
+# FIX: Escaped braces for M_{u}, M_{u, lim}, and A_{sc}
+st.error(rf"**$\mathbf{{M_u}}$ ({Mu:.2f} kNm) $>$ $\mathbf{{M_{{u, \lim}}}}$ ({Mu_lim_kNm:.2f} kNm). Doubly reinforced section is {NOT_OK}. **(Requires $\mathbf{{A_{{sc}}}}$)**")
 st.markdown("---")
 
 # 3. Splitting the moment
@@ -226,8 +229,10 @@ Mu2_kNm = Mu - Mu_lim_kNm
 st.header("Moment Components")
 c_m1, c_m2 = st.columns(2)
 with c_m1:
+    # FIX: Escaped braces for M_{u, lim}
     st.markdown(rf"Moment resisted by concrete & $\mathbf{{A_{{st1}}}}$ ($\mathbf{{M_{{u, \lim}}}}$): {blue(f'{Mu_lim_kNm:.2f} kNm')}")
 with c_m2:
+    # FIX: Escaped braces for M_{u2}
     st.markdown(rf"Remaining moment resisted by $\mathbf{{A_{{sc}}}}$ & $\mathbf{{A_{{st2}}}}$ ($\mathbf{{M_{{u2}}}}$): {red(f'{Mu2_kNm:.2f} kNm')}")
 
 # 4. Stress in Compression Steel (fsc)
@@ -245,16 +250,20 @@ st.markdown("---")
 st.header("Required Reinforcement Areas (IS 456:2000) 🎯")
 c_ast1, c_asc, c_ast2, c_ast_total = st.columns(4)
 with c_ast1:
-    st.markdown(r"**$\mathbf{A_{st1}}$ (mm²)**: (from $\mathbf{M}_{u, \lim}$)") 
+    # FIX: Escaped braces for A_{st1} and M_{u, lim}
+    st.markdown(r"**$\mathbf{A_{{st1}}}$ (mm²)**: (from $\mathbf{M_{{u, \lim}}}$)") 
     st.info(f"{Ast1:.2f}")
 with c_asc:
-    st.markdown(r"**$\mathbf{A_{sc}}$ (mm²)**: (Compression Steel)")
+    # FIX: Escaped braces for A_{sc}
+    st.markdown(r"**$\mathbf{A_{{sc}}}$ (mm²)**: (Compression Steel)")
     st.info(f"{Asc:.2f}")
 with c_ast2:
-    st.markdown(r"**$\mathbf{A_{st2}}$ (mm²)**: (from $\mathbf{M}_{u2}$)")
+    # FIX: Escaped braces for A_{st2} and M_{u2}
+    st.markdown(r"**$\mathbf{A_{{st2}}}$ (mm²)**: (from $\mathbf{M_{{u2}}}$)")
     st.info(f"{Ast2:.2f}")
 with c_ast_total:
-    st.markdown(r"**$\mathbf{A_{st, total}}$ (mm²)**: ($\mathbf{A}_{st1} + \mathbf{A}_{st2}$)")
+    # FIX: Escaped braces for A_{st, total}, A_{st1}, and A_{st2}
+    st.markdown(r"**$\mathbf{A_{{st, total}}}$ (mm²)**: ($\mathbf{A_{{st1}}} + \mathbf{A_{{st2}}}$)")
     st.info(f"{Ast_total:.2f}")
 
 
@@ -265,7 +274,6 @@ st.markdown("---")
 st.header("Design Checks (IS 456:2000) ✅")
 
 # Assume Overall Depth D for Max Steel Check (D = d + d_prime)
-# NOTE: If D is an input, use that value instead. Here we approximate D.
 D = d + d_prime 
 
 # --- 1. Minimum and Maximum Area Checks ---
@@ -275,7 +283,7 @@ c_a1, c_a2, c_a3 = st.columns(3)
 # Minimum Tension Steel (Cl 26.5.1.1)
 Ast_min = (0.85 * b * d) / fy
 with c_a1:
-    st.markdown(blue("Min $A_{st}$"))
+    st.markdown(blue("Min $A_{{st}}$"))
     label(r"**{:.2f} mm²** ($\geq 0.85 \cdot b \cdot d / f_y$)".format(Ast_min))
     result_min = Ast_total >= Ast_min
     st.markdown(f"**Result**: {OK if result_min else NOT_OK}")
@@ -283,7 +291,7 @@ with c_a1:
 # Maximum Tension Steel (Cl 26.5.1.1)
 Ast_max = 0.04 * b * D # Use Overall Depth D
 with c_a2:
-    st.markdown(blue("Max $A_{st}$"))
+    st.markdown(blue("Max $A_{{st}}$"))
     label(r"**{:.2f} mm²** ($\leq 0.04 \cdot b \cdot D$)".format(Ast_max))
     result_max_t = Ast_total <= Ast_max
     st.markdown(f"**Result**: {OK if result_max_t else NOT_OK}")
@@ -291,7 +299,7 @@ with c_a2:
 # Maximum Compression Steel (Cl 26.5.1.2)
 Asc_max = 0.04 * b * D # Use Overall Depth D
 with c_a3:
-    st.markdown(blue("Max $A_{sc}$"))
+    st.markdown(blue("Max $A_{{sc}}$"))
     label(r"**{:.2f} mm²** ($\leq 0.04 \cdot b \cdot D$)".format(Asc_max))
     result_max_c = Asc <= Asc_max
     st.markdown(f"**Result**: {OK if result_max_c else NOT_OK}")
@@ -304,7 +312,7 @@ c_s1, c_s2, c_s3 = st.columns(3)
 tau_v = Vu * 1000 / (b * d)
 with c_s1:
     st.markdown(blue("Nominal Shear Stress $\\tau_v$"))
-    label(f"**{tau_v:.3f} N/mm²** ($V_u / (b \cdot d)$)")
+    label(f"**{tau_v:.3f} N/mm²** ($V_u / (b \\cdot d)$)")
 
 # Design Shear Strength (τc)
 pt = (Ast_total * 100) / (b * d)
@@ -316,7 +324,7 @@ with c_s2:
 # Maximum Shear Stress (τc,max)
 tau_c_max = TAU_C_MAX_VALS.get(fck, 2.8)
 with c_s3:
-    st.markdown(blue("Maximum Shear $\\tau_{c, max}$ (Table 20)"))
+    st.markdown(blue("Maximum Shear $\\tau_{{c, max}}$ (Table 20)"))
     label(f"**{tau_c_max:.1f} N/mm²**")
     
     # Check 1: τv vs τc,max
@@ -356,7 +364,7 @@ actual_ld = L / d
 
 with c_d2:
     st.markdown(blue("Permitted L/d Ratio"))
-    # FIX: Corrected using f-string and escaped LaTeX braces.
+    # FIX: Corrected using f-string and fully escaped LaTeX braces for subscripts.
     label(f"Basic $\\times M_{{f,t}} \\cdot M_{{f,c}} = {basic_ld:.0f} \\cdot {Mf_t:.2f} \\cdot {Mf_c:.2f} = \\mathbf{{ {permitted_ld:.2f} }}$")
     
 # Final Check
