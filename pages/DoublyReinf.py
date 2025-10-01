@@ -91,10 +91,11 @@ def R_lim(fck, fy):
 
 # Stress in compression steel (fsc) in N/mm² based on fy and d'/d (IS 456 Annex E)
 def fsc_calc(fy, d_prime_over_d):
-    d_prime_over_xu_max = d_prime_over_d / xu_max_ratio(fy)
+    xu_d_max = xu_max_ratio(fy)
+    d_prime_over_xu_max = d_prime_over_d / xu_d_max
     
     # Stress values fsc (N/mm²) for d'/xu_max ratios (0.0, 0.1, 0.2, 0.3...)
-    # Reference: IS 456:2000 Table E.1 and E.2 (Interpolated to d'/xu_max)
+    # Reference: IS 456:2000 Table E.1 and E.2 
     
     if fy == 250:
         return 0.87 * fy
@@ -115,7 +116,12 @@ def fsc_calc(fy, d_prime_over_d):
     if d_prime_over_xu_max <= ratios[0]: return fsc_vals[0]
     if d_prime_over_xu_max >= ratios[-1]: return fsc_vals[-1]
 
-    idx = next(i for i, r in enumerate(ratios) if r > d_prime_over_xu_max)
+    # Robust index finding using a standard loop (REPLACEMENT FOR next() generator)
+    idx = 0
+    for i, r in enumerate(ratios):
+        if r > d_prime_over_xu_max:
+            idx = i
+            break
     
     r0, r1 = ratios[idx - 1], ratios[idx]
     f0, f1 = fsc_vals[idx - 1], fsc_vals[idx]
