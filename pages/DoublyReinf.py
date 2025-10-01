@@ -212,15 +212,15 @@ Mu_lim_kNm = R_lim_val * b * d**2 / 1e6
 # 2. Check requirement and calculate Mu2
 is_doubly_required = Mu > Mu_lim_kNm
 st.markdown("---")
-# FIX: Use single-backslashes in raw strings when it's the *only* thing being output/rendered.
-st.info(rf"Limiting Moment $\mathbf{{M_{{u, \lim}}}}$: **{Mu_lim_kNm:.2f} kNm**")
+# FIX: \mathbf must be \\mathbf
+st.info(rf"Limiting Moment $\\mathbf{{M_{{u, \lim}}}}$: **{Mu_lim_kNm:.2f} kNm**")
 
 if not is_doubly_required:
-    # **CRITICAL FIX (SUCCESS):** Use double backslashes for all commands.
+    # FIX: Use double backslashes for all commands.
     st.success(f"$$M_u ({Mu:.2f}\\,\\text{{kNm}}) \\le M_{{u, \\lim}} ({Mu_lim_kNm:.2f}\\,\\text{{kNm}})$$ Doubly reinforced section is {OK}. Proceed with singly reinforced design.")
     st.stop() 
 
-# **CRITICAL FIX (ERROR):** Use double backslashes for all commands.
+# FIX: Use double backslashes for all commands.
 st.error(f"$$M_u ({Mu:.2f}\\,\\text{{kNm}}) > M_{{u, \\lim}} ({Mu_lim_kNm:.2f}\\,\\text{{kNm}})$$ Doubly reinforced section is {NOT_OK}. **(Requires $A_{{sc}}$)**")
 st.markdown("---")
 
@@ -230,10 +230,10 @@ st.header("Moment Components")
 c_m1, c_m2 = st.columns(2)
 with c_m1:
     # FIX: Ensure double backslash for \mathbf
-    st.markdown(rf"Moment resisted by concrete & $\mathbf{{A_{{st1}}}}$ ($\mathbf{{M_{{u, \lim}}}}$): {blue(f'{Mu_lim_kNm:.2f} kNm')}")
+    st.markdown(rf"Moment resisted by concrete & $\\mathbf{{A_{{st1}}}}$ ($\mathbf{{M_{{u, \lim}}}}$): {blue(f'{Mu_lim_kNm:.2f} kNm')}")
 with c_m2:
     # FIX: Ensure double backslash for \mathbf
-    st.markdown(rf"Remaining moment resisted by $\mathbf{{A_{{sc}}}}$ & $\mathbf{{A_{{st2}}}}$ ($\mathbf{{M_{{u2}}}}$): {red(f'{Mu2_kNm:.2f} kNm')}")
+    st.markdown(rf"Remaining moment resisted by $\\mathbf{{A_{{sc}}}}$ & $\\mathbf{{A_{{st2}}}}$ ($\mathbf{{M_{{u2}}}}$): {red(f'{Mu2_kNm:.2f} kNm')}")
 
 # 4. Stress in Compression Steel (fsc)
 d_prime_over_d = d_prime / d
@@ -250,16 +250,20 @@ st.markdown("---")
 st.header("Required Reinforcement Areas (IS 456:2000) 🎯")
 c_ast1, c_asc, c_ast2, c_ast_total = st.columns(4)
 with c_ast1:
-    st.markdown(r"**$\mathbf{A_{{st1}}}$ (mm²)**: (from $\mathbf{M_{{u, \lim}}}$)") 
+    # FIX: Ensure double backslash for \mathbf
+    st.markdown(r"**$\\mathbf{{A_{{st1}}}}$ (mm²)**: (from $\\mathbf{{M_{{u, \lim}}}}$)") 
     st.info(f"{Ast1:.2f}")
 with c_asc:
-    st.markdown(r"**$\mathbf{A_{{sc}}}$ (mm²)**: (Compression Steel)")
+    # FIX: Ensure double backslash for \mathbf
+    st.markdown(r"**$\\mathbf{{A_{{sc}}}}$ (mm²)**: (Compression Steel)")
     st.info(f"{Asc:.2f}")
 with c_ast2:
-    st.markdown(r"**$\mathbf{A_{{st2}}}$ (mm²)**: (from $\mathbf{M_{{u2}}}$)")
+    # FIX: Ensure double backslash for \mathbf
+    st.markdown(r"**$\\mathbf{{A_{{st2}}}}$ (mm²)**: (from $\\mathbf{{M_{{u2}}}}$)")
     st.info(f"{Ast2:.2f}")
 with c_ast_total:
-    st.markdown(r"**$\mathbf{A_{{st, total}}}$ (mm²)**: ($\mathbf{A_{{st1}}} + \mathbf{A_{{st2}}}$)")
+    # FIX: Ensure double backslash for \mathbf
+    st.markdown(r"**$\\mathbf{{A_{{st, total}}}}$ (mm²)**: ($\mathbf{{A_{{st1}}}} + \mathbf{{A_{{st2}}}}$)")
     st.info(f"{Ast_total:.2f}")
 
 
@@ -310,6 +314,7 @@ c_s1, c_s2, c_s3 = st.columns(3)
 # Nominal Shear Stress (τv)
 tau_v = Vu * 1000 / (b * d)
 with c_s1:
+    # FIX: \tau must be \\tau
     st.markdown(blue("Nominal Shear Stress $\\tau_v$"))
     # FIX: Use double backslash for \cdot
     label(f"**{tau_v:.3f} N/mm²** ($V_u / (b \\cdot d)$)")
@@ -318,13 +323,15 @@ with c_s1:
 pt = (Ast_total * 100) / (b * d)
 tau_c = calculate_tau_c(fck, pt)
 with c_s2:
+    # FIX: \tau must be \\tau
     st.markdown(blue("Design Shear Strength $\\tau_c$ (Table 19)"))
+    # FIX: \mathbf must be \\mathbf
     label(f"For $\\mathbf{{p_t={pt:.3f}\\%}}$: **{tau_c:.3f} N/mm²**")
 
 # Maximum Shear Stress (τc,max)
 tau_c_max = TAU_C_MAX_VALS.get(fck, 2.8)
 with c_s3:
-    # FIX: Use double backslash for \tau
+    # FIX: \tau must be \\tau
     st.markdown(blue("Maximum Shear $\\tau_{{c, max}}$ (Table 20)"))
     label(f"**{tau_c_max:.1f} N/mm²**")
     
@@ -340,7 +347,7 @@ if tau_v <= tau_c:
 else:
     Vs_req = (tau_v - tau_c) * b * d / 1000
     # FIX: Use double backslash for \tau and >
-    st.warning(f"**$\\mathbf{{\\tau_v}}$ ({tau_v:.3f}) $>\\mathbf{{\\tau_c}}$ ({tau_c:.3f})**. Shear reinforcement is **required**. $\mathbf{{V_s}} = \\mathbf{{ {Vs_req:.2f} kN}}$")
+    st.warning(f"**$\\mathbf{{\\tau_v}}$ ({tau_v:.3f}) $>\\mathbf{{\\tau_c}}$ ({tau_c:.3f})**. Shear reinforcement is **required**. $\\mathbf{{V_s}} = \\mathbf{{ {Vs_req:.2f} kN}}$")
 
 
 # --- 3. Deflection Control Check ---
@@ -373,6 +380,6 @@ with c_d2:
     
 # Final Check
 result_deflection = actual_ld <= permitted_ld
-# FIX: Use double backslash for \le
+# FIX: Use double backslash for \le and \mathbf
 st.markdown(f"**Actual L/d ({actual_ld:.2f}) $\\mathbf{{\\le}}$ Permitted L/d ({permitted_ld:.2f})**")
 st.markdown(f"**Deflection Check Result**: {OK if result_deflection else NOT_OK}")
