@@ -212,7 +212,7 @@ Mu_lim_kNm = R_lim_val * b * d**2 / 1e6
 # 2. Check requirement and calculate Mu2
 is_doubly_required = Mu > Mu_lim_kNm
 st.markdown("---")
-st.info(rf"Limiting Moment $\mathbf{{M_{{u, \lim}}}}$: **{Mu_lim_kNm:.2f} kNm**")
+st.info(rf"Limiting Moment $\\mathbf{{M_{{u, \lim}}}}$: **{Mu_lim_kNm:.2f} kNm**")
 
 if not is_doubly_required:
     # **CRITICAL FIX 1 (SUCCESS):** Wrap the entire formula/text in double dollar signs ($$ $$) 
