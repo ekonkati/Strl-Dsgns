@@ -212,15 +212,16 @@ Mu_lim_kNm = R_lim_val * b * d**2 / 1e6
 # 2. Check requirement and calculate Mu2
 is_doubly_required = Mu > Mu_lim_kNm
 st.markdown("---")
-# FIX: Use \\mathbf
-st.info(rf"Limiting Moment $\\mathbf{{M_{{u, \lim}}}}$: **{Mu_lim_kNm:.2f} kNm**")
+# FIX: Use st.latex for key formula output
+st.latex(f"M_{{u, \\lim}} = {Mu_lim_kNm:.2f}\\,\\text{{kNm}}")
+
 
 if not is_doubly_required:
-    # FIX: Use double backslashes for all commands, including \text and \le.
+    # FIX: Use the strong $$ delimiters with correct escaping
     st.success(f"$$M_u ({Mu:.2f}\\,\\text{{kNm}}) \\le M_{{u, \\lim}} ({Mu_lim_kNm:.2f}\\,\\text{{kNm}})$$ Doubly reinforced section is {OK}. Proceed with singly reinforced design.")
     st.stop() 
 
-# FIX: Use double backslashes for all commands, including \text and >.
+# FIX: Use the strong $$ delimiters with correct escaping
 st.error(f"$$M_u ({Mu:.2f}\\,\\text{{kNm}}) > M_{{u, \\lim}} ({Mu_lim_kNm:.2f}\\,\\text{{kNm}})$$ Doubly reinforced section is {NOT_OK}. **(Requires $A_{{sc}}$)**")
 st.markdown("---")
 
@@ -229,11 +230,11 @@ Mu2_kNm = Mu - Mu_lim_kNm
 st.header("Moment Components")
 c_m1, c_m2 = st.columns(2)
 with c_m1:
-    # FIX: Ensure double backslash for \mathbf
-    st.markdown(rf"Moment resisted by concrete & $\\mathbf{{A_{{st1}}}}$ ($\mathbf{{M_{{u, \lim}}}}$): {blue(f'{Mu_lim_kNm:.2f} kNm')}")
+    # FIX: Removed \mathbf and used Markdown only for highlighting
+    st.markdown(f"Moment resisted by concrete & **$A_{{st1}}$** ($M_{{u, \lim}}$): {blue(f'{Mu_lim_kNm:.2f} kNm')}")
 with c_m2:
-    # FIX: Ensure double backslash for \mathbf
-    st.markdown(rf"Remaining moment resisted by $\\mathbf{{A_{{sc}}}}$ & $\\mathbf{{A_{{st2}}}}$ ($\mathbf{{M_{{u2}}}}$): {red(f'{Mu2_kNm:.2f} kNm')}")
+    # FIX: Removed \mathbf and used Markdown only for highlighting
+    st.markdown(f"Remaining moment resisted by **$A_{{sc}}$** & **$A_{{st2}}$** ($M_{{u2}}$): {red(f'{Mu2_kNm:.2f} kNm')}")
 
 # 4. Stress in Compression Steel (fsc)
 d_prime_over_d = d_prime / d
@@ -250,20 +251,20 @@ st.markdown("---")
 st.header("Required Reinforcement Areas (IS 456:2000) 🎯")
 c_ast1, c_asc, c_ast2, c_ast_total = st.columns(4)
 with c_ast1:
-    # FIX: Ensure double backslash for \mathbf
-    st.markdown(r"**$\\mathbf{{A_{{st1}}}}$ (mm²)**: (from $\\mathbf{{M_{{u, \lim}}}}$)") 
+    # FIX: Use single-dollar for in-line math, removed bold command
+    st.markdown(r"**$A_{{st1}}$ (mm²)**: (from $M_{{u, \lim}}$)") 
     st.info(f"{Ast1:.2f}")
 with c_asc:
-    # FIX: Ensure double backslash for \mathbf
-    st.markdown(r"**$\\mathbf{{A_{{sc}}}}$ (mm²)**: (Compression Steel)")
+    # FIX: Use single-dollar for in-line math, removed bold command
+    st.markdown(r"**$A_{{sc}}$ (mm²)**: (Compression Steel)")
     st.info(f"{Asc:.2f}")
 with c_ast2:
-    # FIX: Ensure double backslash for \mathbf
-    st.markdown(r"**$\\mathbf{{A_{{st2}}}}$ (mm²)**: (from $\\mathbf{{M_{{u2}}}}$)")
+    # FIX: Use single-dollar for in-line math, removed bold command
+    st.markdown(r"**$A_{{st2}}$ (mm²)**: (from $M_{{u2}}$)")
     st.info(f"{Ast2:.2f}")
 with c_ast_total:
-    # FIX: Ensure double backslash for \mathbf
-    st.markdown(r"**$\\mathbf{{A_{{st, total}}}}$ (mm²)**: ($\mathbf{{A_{{st1}}}} + \mathbf{{A_{{st2}}}}$)")
+    # FIX: Use single-dollar for in-line math, removed bold command
+    st.markdown(r"**$A_{{st, total}}$ (mm²)**: ($A_{{st1}} + A_{{st2}}$)")
     st.info(f"{Ast_total:.2f}")
 
 
@@ -284,8 +285,8 @@ c_a1, c_a2, c_a3 = st.columns(3)
 Ast_min = (0.85 * b * d) / fy
 with c_a1:
     st.markdown(blue("Min $A_{{st}}$"))
-    # FIX: Use double backslash for \cdot
-    label(r"**{:.2f} mm²** ($\geq 0.85 \\cdot b \\cdot d / f_y$)".format(Ast_min))
+    # FIX: Removed HTML coloring/bolding from label to force MathJax parsing, used \cdot
+    st.markdown(rf"**{Ast_min:.2f} mm²** ($\geq 0.85 \cdot b \cdot d / f_y$)")
     result_min = Ast_total >= Ast_min
     st.markdown(f"**Result**: {OK if result_min else NOT_OK}")
 
@@ -293,8 +294,8 @@ with c_a1:
 Ast_max = 0.04 * b * D # Use Overall Depth D
 with c_a2:
     st.markdown(blue("Max $A_{{st}}$"))
-    # FIX: Use double backslash for \cdot
-    label(r"**{:.2f} mm²** ($\leq 0.04 \\cdot b \\cdot D$)".format(Ast_max))
+    # FIX: Removed HTML coloring/bolding from label to force MathJax parsing, used \cdot
+    st.markdown(rf"**{Ast_max:.2f} mm²** ($\leq 0.04 \cdot b \cdot D$)")
     result_max_t = Ast_total <= Ast_max
     st.markdown(f"**Result**: {OK if result_max_t else NOT_OK}")
 
@@ -302,8 +303,8 @@ with c_a2:
 Asc_max = 0.04 * b * D # Use Overall Depth D
 with c_a3:
     st.markdown(blue("Max $A_{{sc}}$"))
-    # FIX: Use double backslash for \cdot
-    label(r"**{:.2f} mm²** ($\leq 0.04 \\cdot b \\cdot D$)".format(Asc_max))
+    # FIX: Removed HTML coloring/bolding from label to force MathJax parsing, used \cdot
+    st.markdown(rf"**{Asc_max:.2f} mm²** ($\leq 0.04 \cdot b \cdot D$)")
     result_max_c = Asc <= Asc_max
     st.markdown(f"**Result**: {OK if result_max_c else NOT_OK}")
 
@@ -314,39 +315,37 @@ c_s1, c_s2, c_s3 = st.columns(3)
 # Nominal Shear Stress (τv)
 tau_v = Vu * 1000 / (b * d)
 with c_s1:
-    # FIX: \tau must be \\tau
+    # FIX: Used \\tau and single-dollar for cleaner parsing
     st.markdown(blue("Nominal Shear Stress $\\tau_v$"))
-    # FIX: Use double backslash for \cdot
-    label(f"**{tau_v:.3f} N/mm²** ($V_u / (b \\cdot d)$)")
+    st.markdown(f"**{tau_v:.3f} N/mm²** ($V_u / (b \\cdot d)$)")
 
 # Design Shear Strength (τc)
 pt = (Ast_total * 100) / (b * d)
 tau_c = calculate_tau_c(fck, pt)
 with c_s2:
-    # FIX: \tau must be \\tau
+    # FIX: Used \\tau and single-dollar for cleaner parsing
     st.markdown(blue("Design Shear Strength $\\tau_c$ (Table 19)"))
-    # FIX: \mathbf must be \\mathbf
-    label(f"For $\\mathbf{{p_t={pt:.3f}\\%}}$: **{tau_c:.3f} N/mm²**")
+    st.markdown(f"For $\\mathbf{{p_t={pt:.3f}\\%}}$: **{tau_c:.3f} N/mm²**")
 
 # Maximum Shear Stress (τc,max)
 tau_c_max = TAU_C_MAX_VALS.get(fck, 2.8)
 with c_s3:
-    # FIX: \tau must be \\tau
+    # FIX: Used \\tau
     st.markdown(blue("Maximum Shear $\\tau_{{c, max}}$ (Table 20)"))
-    label(f"**{tau_c_max:.1f} N/mm²**")
+    st.markdown(f"**{tau_c_max:.1f} N/mm²**")
     
     # Check 1: τv vs τc,max
     result_max_shear = tau_v <= tau_c_max
-    # FIX: Use double backslash for \tau and \le
-    st.markdown(f"**$\\mathbf{{\\tau_v}} \\le \\mathbf{{\\tau_{{c, max}}}}$**: {OK if result_max_shear else NOT_OK}")
+    # FIX: Used $\mathbf{...}$ to trigger MathJax parsing
+    st.markdown(f"**$\mathbf{{\\tau_v}} \\le \\mathbf{{\\tau_{{c, max}}}}$**: {OK if result_max_shear else NOT_OK}")
 
 # Shear Reinforcement Decision (Cl 40.3)
 if tau_v <= tau_c:
-    # FIX: Use double backslash for \tau and \le
+    # FIX: Used $\mathbf{...}$ to trigger MathJax parsing
     st.success(f"**$\\mathbf{{\\tau_v}}$ ({tau_v:.3f}) $\\le \\mathbf{{\\tau_c}}$ ({tau_c:.3f})**. Nominal shear reinforcement only (Cl 40.3).")
 else:
     Vs_req = (tau_v - tau_c) * b * d / 1000
-    # FIX: Use double backslash for \tau and >
+    # FIX: Used $\mathbf{...}$ to trigger MathJax parsing
     st.warning(f"**$\\mathbf{{\\tau_v}}$ ({tau_v:.3f}) $>\\mathbf{{\\tau_c}}$ ({tau_c:.3f})**. Shear reinforcement is **required**. $\\mathbf{{V_s}} = \\mathbf{{ {Vs_req:.2f} kN}}$")
 
 
@@ -375,11 +374,11 @@ actual_ld = L / d
 
 with c_d2:
     st.markdown(blue("Permitted L/d Ratio"))
-    # FIX: Use double backslash for all commands: \times, \cdot, \mathbf
-    label(f"Basic $\\times M_{{f,t}} \\cdot M_{{f,c}} = {basic_ld:.0f} \\cdot {Mf_t:.2f} \\cdot {Mf_c:.2f} = \\mathbf{{ {permitted_ld:.2f} }}$")
+    # FIX: Removed the label function and used st.markdown for reliable math rendering
+    st.markdown(f"Basic $\\times M_{{f,t}} \\cdot M_{{f,c}} = {basic_ld:.0f} \\cdot {Mf_t:.2f} \\cdot {Mf_c:.2f} = \\mathbf{{ {permitted_ld:.2f} }}$")
     
 # Final Check
 result_deflection = actual_ld <= permitted_ld
-# FIX: Use double backslash for \le and \mathbf
+# FIX: Used $\mathbf{...}$ to trigger MathJax parsing
 st.markdown(f"**Actual L/d ({actual_ld:.2f}) $\\mathbf{{\\le}}$ Permitted L/d ({permitted_ld:.2f})**")
 st.markdown(f"**Deflection Check Result**: {OK if result_deflection else NOT_OK}")
