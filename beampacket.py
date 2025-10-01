@@ -1,11 +1,20 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
+
 import math
+import numpy as np
+import pandas as pd
+import streamlit as st
 
-st.set_page_config(page_title="Head 1 – RCC Beam Check (ANNEX A logic)", layout="wide")
+st.set_page_config(page_title="Head 1 – Vertical Packet UI", layout="wide")
 
-# ---------- Helpers ----------
+# ---------- Styles (blue inputs / red outputs) ----------
+BLUE = "#1f6feb"
+RED = "#d11a2a"
+
+def blue(s):  return f"<span style='color:{BLUE};font-weight:600'>{s}</span>"
+def red(s):   return f"<span style='color:{RED};font-weight:700'>{s}</span>"
+def hsub(title): st.markdown(f"### {title}")
+
+# ---------- Design helpers ----------
 def xu_max_ratio(fy):
     if fy <= 260: return 0.53
     if fy <= 450: return 0.48
@@ -13,35 +22,72 @@ def xu_max_ratio(fy):
 
 def mu_lim_kNm(fck, fy, b, d):
     xu = xu_max_ratio(fy) * d
-    # Mu_lim = 0.36 fck b xu (d - 0.42 xu), units N*mm -> kNm
-    return 0.36 * fck * b * xu * (d - 0.42 * xu) / 1e6
+    return 0.36 * fck * b * xu * (d - 0.42 * xu) / 1e6  # kNm
 
 def ast_singly_for_Mu(Mu_kNm, fck, fy, b, d):
-    """Compute Ast for a given Mu using an iterative jd. Returns Ast, xu/d, jd, Mu_lim."""
     Mu = Mu_kNm * 1e6
-    xu_ratio = xu_max_ratio(fy)
-    Mu_lim = mu_lim_kNm(fck, fy, b, d)
-    # Start with jd ~ 0.9 d, update once via xu from equilibrium
     jd = 0.9 * d
     Ast = Mu / (0.87 * fy * jd) if jd > 0 else float('nan')
     if Ast <= 0 or math.isnan(Ast):
-        return float('nan'), float('nan'), float('nan'), Mu_lim
+        return float('nan'), float('nan'), float('nan'), mu_lim_kNm(fck, fy, b, d)
     xu_try = (0.87 * fy * Ast) / (0.36 * fck * b)
     jd = d * (1 - 0.42 * (xu_try / d))
     if jd <= 0: jd = 0.9 * d
     Ast = Mu / (0.87 * fy * jd)
-    return Ast, (xu_try/d), jd, Mu_lim
+    return Ast, (xu_try/d), jd, mu_lim_kNm(fck, fy, b, d)
 
 def d_required_for_Mu_lim(Mu_kNm, fck, fy, b):
-    """Solve Mu_lim(d) >= Mu for minimum d. Closed-form from Mu_lim = C * d^2."""
-    # Mu_lim = 0.36 * fck * b * (xu_max*d) * (d - 0.42*xu_max*d)
-    #        = 0.36 * fck * b * d^2 * xu_max * (1 - 0.42*xu_max) = C * d^2
     xu_max = xu_max_ratio(fy)
-    C = 0.36 * fck * b * xu_max * (1 - 0.42 * xu_max)  # N/mm^2 * mm -> N
+    C = 0.36 * fck * b * xu_max * (1 - 0.42 * xu_max)
     if C <= 0: return float('nan')
-    Mu = Mu_kNm * 1e6  # Nmm
-    d_req = math.sqrt(Mu / C)
-    return d_req
+    Mu = Mu_kNm * 1e6
+    return math.sqrt(Mu / C)
+
+# tau_c table (representative IS 456 Table 19 values). Replace with workbook values if needed.
+TAU_C_TABLE = pd.DataFrame(
+    data=[
+        [0.28, 0.29, 0.30, 0.31, 0.31],
+        [0.38, 0.40, 0.41, 0.42, 0.42],
+        [0.47, 0.50, 0.51, 0.52, 0.52],
+        [0.62, 0.62, 0.62, 0.62, 0.62],
+        [0.62, 0.62, 0.62, 0.62, 0.62],
+        [0.62, 0.62, 0.62, 0.62, 0.62],
+        [0.62, 0.62, 0.62, 0.62, 0.62],
+        [0.62, 0.62, 0.62, 0.62, 0.62],
+        [0.62, 0.62, 0.62, 0.62, 0.62],
+        [0.62, 0.62, 0.62, 0.62, 0.62],
+    ],
+    index=[0.25,0.50,0.75,1.0,1.25,1.5,1.75,2.0,3.0,4.0],
+    columns=[20,25,30,35,40],
+)
+
+def bilinear_interp(df, x, y):
+    xs = np.array(df.index, dtype=float)
+    ys = np.array(df.columns, dtype=float)
+    x = float(np.clip(x, xs.min(), xs.max()))
+    y = float(np.clip(y, ys.min(), ys.max()))
+    i = np.searchsorted(xs, x) - 1
+    j = np.searchsorted(ys, y) - 1
+    i = int(np.clip(i, 0, len(xs)-2))
+    j = int(np.clip(j, 0, len(ys)-2))
+    x0, x1 = xs[i], xs[i+1]
+    y0, y1 = ys[j], ys[j+1]
+    q11 = df.iloc[i, j]
+    q12 = df.iloc[i, j+1]
+    q21 = df.iloc[i+1, j]
+    q22 = df.iloc[i+1, j+1]
+    if x1==x0 and y1==y0:
+        return float(q11)
+    if x1==x0:
+        return float(q11 + (q12-q11)*(y-y0)/(y1-y0))
+    if y1==y0:
+        return float(q11 + (q21-q11)*(x-x0)/(x1-x0))
+    return float(
+        q11*(x1-x)*(y1-y)/((x1-x0)*(y1-y0)) +
+        q21*(x-x0)*(y1-y)/((x1-x0)*(y1-y0)) +
+        q12*(x1-x)*(y-y0)/((x1-x0)*(y1-y0)) +
+        q22*(x-x0)*(y-y0)/((x1-x0)*(y1-y0))
+    )
 
 def area_bars(diams, nos):
     A = 0.0
@@ -50,130 +96,145 @@ def area_bars(diams, nos):
             A += n * (math.pi * (dia ** 2) / 4.0)
     return A
 
-def packet_card(title, rows):
-    """rows: list of (label, unit, value_str)"""
-    with st.container(border=True):
-        st.markdown(f"**{title}**")
-        df = pd.DataFrame([
-            {"Item": lbl, "Unit": unit, "Value": val} for (lbl, unit, val) in rows
-        ])
-        st.dataframe(df, hide_index=True, use_container_width=True)
+# ---------- PAGE ----------
+st.title("Head 1 – Vertical Subhead Layout")
 
-# ---------- UI ----------
-st.title("Head 1 – Design & Check (Support + Span + Depth + Rebar)")
-with st.sidebar:
-    st.header("Materials")
-    fck = st.selectbox("Concrete fck (MPa)", [20, 25, 30, 35, 40], index=1)
-    fy  = st.selectbox("Steel fy (MPa)", [250, 415, 500], index=1)
-    fy_sv = st.selectbox("Stirrup fy (MPa)", [250, 415, 500], index=1)
-    st.markdown("---")
-    st.header("Section")
-    b = st.number_input("Width b (mm)", min_value=100.0, value=230.0, step=10.0)
-    d_prov = st.number_input("Effective depth d_prov (mm)", min_value=100.0, value=319.0, step=5.0)
-    st.caption("Use your actual effective depth (overall depth minus cover & half bar dia).")
-
-
-st.subheader("Actions (factored)")
-c1, c2, c3 = st.columns(3)
-with c1:
-    Mu_support = st.number_input("Mu_support (kNm)", min_value=0.0, value=20.625, step=0.5, format="%f")
-with c2:
-    Mu_span = st.number_input("Mu_span (kNm)", min_value=0.0, value=17.2, step=0.5, format="%f")
-with c3:
-    Vu = st.number_input("Vu (kN) [optional for shear]", min_value=0.0, value=0.0, step=1.0)
+# Subhead 1: Materials & Geometry
+hsub("Materials & Geometry")
+c1,c2,c3,c4,c5,c6,c7 = st.columns(7)
+with c1: fy = st.number_input(blue("fy (MPa)"), value=415.0, step=1.0, min_value=200.0, format="%f")
+with c2: fck = st.number_input(blue("fck (MPa)"), value=20.0, step=1.0, min_value=15.0, format="%f")
+with c3: b = st.number_input(blue("b (mm)"), value=230.0, step=10.0, min_value=100.0, format="%f")
+with c4: d = st.number_input(blue("d_prov (mm)"), value=350.0, step=5.0, min_value=100.0, format="%f")
+with c5: cover = st.number_input(blue("cover (mm)"), value=25.0, step=1.0, min_value=0.0, format="%f")
+with c6: phi_main = st.number_input(blue("main bar dia (mm)"), value=12.0, step=1.0, min_value=6.0, format="%f")
+with c7: Lspan = st.number_input(blue("clear span L (mm)"), value=5000.0, step=50.0, min_value=500.0, format="%f")
 
 st.markdown("---")
-st.subheader("Flexure – Required steel")
-Ast_spt, xu_spt_ratio, jd_spt, Mu_lim = ast_singly_for_Mu(Mu_support, fck, fy, b, d_prov)
-Ast_span, xu_span_ratio, jd_span, _ = ast_singly_for_Mu(Mu_span, fck, fy, b, d_prov)
 
-pt_spt = 100.0 * Ast_spt / (b * d_prov) if b*d_prov>0 else float('nan')
-pt_span = 100.0 * Ast_span / (b * d_prov) if b*d_prov>0 else float('nan')
-status_mu = "ok" if (Mu_support <= Mu_lim and Mu_span <= Mu_lim) else "exceeds"
-
-# Packet: Required (support & span)
-packet_card("Required at support", [
-    ("Mu_support", "kNm", f"{Mu_support:.3f}"),
-    ("Ast req, spt", "mm²", f"{Ast_spt:.2f}"),
-    ("pt req, spt", "%", f"{pt_spt:.2f}"),
-])
-packet_card("Required at span", [
-    ("Mu_span", "kNm", f"{Mu_span:.3f}"),
-    ("Ast span", "mm²", f"{Ast_span:.2f}"),
-    ("pt req, span", "%", f"{pt_span:.2f}"),
-])
+# Subhead 2: Actions/Design inputs
+hsub("Actions (factored)")
+c1,c2,c3 = st.columns(3)
+with c1: Mu_support = st.number_input(blue("Mu_support (kNm)"), value=20.625, step=0.5, min_value=0.0, format="%f")
+with c2: Mu_span = st.number_input(blue("Mu_span (kNm)"), value=17.2, step=0.5, min_value=0.0, format="%f")
+with c3: Vu = st.number_input(blue("Vu (kN)"), value=64.60, step=0.5, min_value=0.0, format="%f")
 
 st.markdown("---")
-st.subheader("Depth check (from Mu_lim)")
+
+# Subhead 3: Required steel (Support & Span)
+hsub("Required Steel – Support")
+Ast_spt, xu_spt_ratio, jd_spt, Mu_lim = ast_singly_for_Mu(Mu_support, fck, fy, b, d)
+pt_spt = 100.0 * Ast_spt / (b * d) if b*d>0 else float('nan')
+st.markdown(f"{blue('Mu_support')} kNm = {red(f'{Mu_support:.3f}')} &nbsp;&nbsp; "
+            f"{blue('Ast req, spt')} mm² = {red(f'{Ast_spt:.2f}')} &nbsp;&nbsp; "
+            f"{blue('pt req, spt')} % = {red(f'{pt_spt:.2f}')}  ")
+
+hsub("Required Steel – Span")
+Ast_span, xu_span_ratio, jd_span, _ = ast_singly_for_Mu(Mu_span, fck, fy, b, d)
+pt_span = 100.0 * Ast_span / (b * d) if b*d>0 else float('nan')
+st.markdown(f"{blue('Mu_span')} kNm = {red(f'{Mu_span:.3f}')} &nbsp;&nbsp; "
+            f"{blue('Ast span')} mm² = {red(f'{Ast_span:.2f}')} &nbsp;&nbsp; "
+            f"{blue('pt req, span')} % = {red(f'{pt_span:.2f}')}  ")
+
+st.markdown("---")
+
+# Subhead 4: Depth check
+hsub("Check for Depth")
 d_req_ctrl = max(d_required_for_Mu_lim(Mu_support, fck, fy, b),
                  d_required_for_Mu_lim(Mu_span, fck, fy, b))
-res_depth = "okay" if d_prov >= d_req_ctrl else "not okay"
-packet_card("check for depth", [
-    ("d req mm", "mm", f"{d_req_ctrl:.2f}"),
-    ("d prov mm", "mm", f"{d_prov:.0f}"),
-    ("Result", "", res_depth),
-])
+depth_ok = d >= d_req_ctrl
+st.markdown(f"{blue('d req mm')} = {red(f'{d_req_ctrl:.2f}')} &nbsp;&nbsp; "
+            f"{blue('d prov mm')} = {red(f'{d:.0f}')} &nbsp;&nbsp; "
+            f"{blue('Result')} = {red('Okay' if depth_ok else 'Not OK')}")
 
 st.markdown("---")
-st.subheader("Reinforcement details provided – compare with required")
-st.caption("Enter up to 3 bar groups for support and span (Nos & dia). Leave zeros if not used.")
-# Support bars
-cols = st.columns(6)
-with cols[0]:
-    ns1 = st.number_input("spt Nos1", min_value=0, value=2, step=1)
-with cols[1]:
-    ds1 = st.number_input("spt dia1 (mm)", min_value=0, value=12, step=1)
-with cols[2]:
-    ns2 = st.number_input("spt Nos2", min_value=0, value=0, step=1)
-with cols[3]:
-    ds2 = st.number_input("spt dia2 (mm)", min_value=0, value=0, step=1)
-with cols[4]:
-    ns3 = st.number_input("spt Nos3", min_value=0, value=0, step=1)
-with cols[5]:
-    ds3 = st.number_input("spt dia3 (mm)", min_value=0, value=0, step=1)
 
+# Subhead 5: Reinforcement details provided (support & span)
+hsub("Reinf. details at support")
+c = st.columns(6)
+with c[0]: ns1 = st.number_input(blue("Nos1"), value=2, step=1, min_value=0)
+with c[1]: ds1 = st.number_input(blue("dia1 (mm)"), value=12, step=1, min_value=0)
+with c[2]: ns2 = st.number_input(blue("Nos2"), value=0, step=1, min_value=0)
+with c[3]: ds2 = st.number_input(blue("dia2 (mm)"), value=0, step=1, min_value=0)
+with c[4]: ns3 = st.number_input(blue("Nos3"), value=0, step=1, min_value=0)
+with c[5]: ds3 = st.number_input(blue("dia3 (mm)"), value=0, step=1, min_value=0)
 Ast_spt_prov = area_bars([ds1, ds2, ds3], [ns1, ns2, ns3])
-pt_spt_prov = 100.0 * Ast_spt_prov / (b * d_prov) if b*d_prov>0 else float('nan')
-res_spt = "okay" if Ast_spt_prov >= Ast_spt else "not okay"
+pt_spt_prov = 100.0 * Ast_spt_prov / (b * d) if b*d>0 else float('nan')
+spt_ok = Ast_spt_prov >= Ast_spt
+st.markdown(f"{blue('Nos.')} = {red(f'{ns1}+{ns2}+{ns3}')} &nbsp;&nbsp; "
+            f"{blue('dia')} mm = {red(f'{ds1}/{ds2}/{ds3}')} &nbsp;&nbsp; "
+            f"{blue('Ast support')} mm² = {red(f'{Ast_spt_prov:.2f}')} &nbsp;&nbsp; "
+            f"{blue('pt support')} % = {red(f'{pt_spt_prov:.2f}')} &nbsp;&nbsp; "
+            f"{blue('Result')} = {red('okay' if spt_ok else 'not okay')}")
 
-packet_card("Reinf. details at support", [
-    ("Nos.", "", f"{ns1}+{ns2}+{ns3}"),
-    ("dia", "mm", f"{ds1}/{ds2}/{ds3}"),
-    ("Ast support", "mm²", f"{Ast_spt_prov:.2f}"),
-    ("pt support", "%", f"{pt_spt_prov:.2f}"),
-    ("Result", "", res_spt),
-])
-
-# Span bars
-cols2 = st.columns(6)
-with cols2[0]:
-    nn1 = st.number_input("span Nos1", min_value=0, value=2, step=1)
-with cols2[1]:
-    dn1 = st.number_input("span dia1 (mm)", min_value=0, value=12, step=1)
-with cols2[2]:
-    nn2 = st.number_input("span Nos2", min_value=0, value=0, step=1)
-with cols2[3]:
-    dn2 = st.number_input("span dia2 (mm)", min_value=0, value=0, step=1)
-with cols2[4]:
-    nn3 = st.number_input("span Nos3", min_value=0, value=0, step=1)
-with cols2[5]:
-    dn3 = st.number_input("span dia3 (mm)", min_value=0, value=0, step=1)
-
+hsub("Reinf. details at span")
+c2 = st.columns(6)
+with c2[0]: nn1 = st.number_input(blue("Nos1 "), value=2, step=1, min_value=0, key="n1")
+with c2[1]: dn1 = st.number_input(blue("dia1 (mm) "), value=12, step=1, min_value=0, key="d1")
+with c2[2]: nn2 = st.number_input(blue("Nos2 "), value=0, step=1, min_value=0, key="n2")
+with c2[3]: dn2 = st.number_input(blue("dia2 (mm) "), value=0, step=1, min_value=0, key="d2")
+with c2[4]: nn3 = st.number_input(blue("Nos3 "), value=0, step=1, min_value=0, key="n3")
+with c2[5]: dn3 = st.number_input(blue("dia3 (mm) "), value=0, step=1, min_value=0, key="d3")
 Ast_span_prov = area_bars([dn1, dn2, dn3], [nn1, nn2, nn3])
-pt_span_prov = 100.0 * Ast_span_prov / (b * d_prov) if b*d_prov>0 else float('nan')
-res_span = "okay" if Ast_span_prov >= Ast_span else "not okay"
-
-packet_card("Reinf. details at span", [
-    ("Nos.", "", f"{nn1}+{nn2}+{nn3}"),
-    ("dia", "mm", f"{dn1}/{dn2}/{dn3}"),
-    ("Ast span", "mm²", f"{Ast_span_prov:.2f}"),
-    ("pt span", "%", f"{pt_span_prov:.2f}"),
-    ("Result", "", res_span),
-])
+pt_span_prov = 100.0 * Ast_span_prov / (b * d) if b*d>0 else float('nan')
+span_ok = Ast_span_prov >= Ast_span
+st.markdown(f"{blue('Nos.')} = {red(f'{nn1}+{nn2}+{nn3}')} &nbsp;&nbsp; "
+            f"{blue('dia')} mm = {red(f'{dn1}/{dn2}/{dn3}')} &nbsp;&nbsp; "
+            f"{blue('Ast span')} mm² = {red(f'{Ast_span_prov:.2f}')} &nbsp;&nbsp; "
+            f"{blue('pt span')} % = {red(f'{pt_span_prov:.2f}')} &nbsp;&nbsp; "
+            f"{blue('Result')} = {red('okay' if span_ok else 'not okay')}")
 
 st.markdown("---")
-st.subheader("Summary status")
-status = all([res_depth=="okay", res_spt=="okay", res_span=="okay", status_mu=="ok"]) 
-st.success("Head 1: PASS ✅" if status else "Head 1: CHECK ❌") 
-st.caption(f"Mu limits: support/span within singly-reinforced limit → {status_mu}")
 
+# Subhead 6: Shear check + Stirrups
+hsub("Shear Check and Stirrups")
+c = st.columns(5)
+with c[0]: phi_sv = st.number_input(blue("stirrup dia (mm)"), value=8.0, step=1.0, min_value=6.0, format="%f")
+with c[1]: legs = st.selectbox(blue("legs"), [2,4], index=0)
+with c[2]: fy_sv = st.number_input(blue("fy_stirrup (MPa)"), value=415.0, step=1.0, min_value=200.0, format="%f")
+with c[3]: cover_sv = st.number_input(blue("web cover (mm)"), value=25.0, step=1.0, min_value=0.0, format="%f")
+with c[4]: note_toggle = st.checkbox("Show note", value=True)
+
+VuN = Vu * 1e3
+tau_v = VuN / (b * d) if b*d>0 else float('nan')  # MPa
+pt_use = max(0.01, (pt_spt + pt_span)/2.0)  # rough % tension; avoid 0 for lookup
+tau_c = TAU_C_TABLE.iloc[-1,-1]  # default
+try:
+    tau_c = bilinear_interp(TAU_C_TABLE, pt_use, fck)
+except Exception:
+    pass
+k = min(2.0, 1.0 + 200.0 / max(1.0, d))
+tau_c_min = 0.035 * k * (fck ** 0.5)
+tau_c_use = max(tau_c, tau_c_min)
+tau_cmax = 0.62 * (fck ** 0.5)  # IS 456 limit
+
+st.markdown(f"{blue('τ_v')} MPa = {red(f'{tau_v:.3f}')} &nbsp;&nbsp; "
+            f"{blue('τ_c,design')} MPa = {red(f'{tau_c_use:.3f}')} &nbsp;&nbsp; "
+            f"{blue('τ_c,max')} MPa = {red(f'{tau_cmax:.3f}')}")
+
+if note_toggle:
+    if tau_v > tau_c_use and tau_v < tau_cmax:
+        st.markdown(red("τ_v > τ_c,design for shear; τ_v < τ_c,max, Ok – provide shear steel"))
+    elif tau_v <= tau_c_use:
+        st.markdown(red("τ_v ≤ τ_c,design – minimum shear steel only"))
+    else:
+        st.markdown(red("τ_v ≥ τ_c,max – Increase section or grade"))
+
+# Stirrups spacing if Vus needed
+Vc = tau_c_use * b * d
+Vus = max(0.0, VuN - Vc)
+Asv = legs * (0.25 * math.pi * phi_sv**2)
+if Vus > 0 and Asv > 0:
+    s = (0.87 * fy_sv * Asv * d) / Vus  # mm
+    s_lim = min(0.75*d, 300.0)
+    s_use = min(s, s_lim)
+    st.markdown(f"{blue('Design s')} mm = {red(f'{s:.0f}')} &nbsp;&nbsp; "
+                f"{blue('Provide')} = {red(f'{int(s_use)} mm c/c (≤ {int(s_lim)} mm)')}")
+else:
+    st.markdown(red("Provide minimum shear reinforcement as per IS 456."))
+
+st.markdown("---")
+
+# Subhead 7: Summary
+overall = all([depth_ok, spt_ok, span_ok, (Mu_support <= Mu_lim and Mu_span <= Mu_lim)])
+st.success("Overall: PASS ✅" if overall else "Overall: CHECK ❌")
