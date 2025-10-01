@@ -146,7 +146,7 @@ st.markdown("---")
 
 # ---------- Materials & Geometry ----------
 st.header("Materials & Geometry (Inputs) 🧱")
-st.markdown("""
+st.markdown(r"""
 **📝 NARRATIVE:** Required when $M_u$ exceeds the limiting moment capacity $M_{u, \lim}$.
 - **$d$**: Effective depth to tension steel.
 - **$d'$**: Effective cover to compression steel.
@@ -171,7 +171,7 @@ with c5:
 st.markdown("---")
 
 # ---------- Actions (Factored) ----------
-st.header("Factored Moment $\mathbf{M_u}$ ⚙️")
+st.header(r"Factored Moment $\mathbf{M_u}$ ⚙️")
 c1, c2 = st.columns(2)
 with c1:
     st.markdown(blue("Mu (kNm)"), unsafe_allow_html=True)
@@ -186,13 +186,13 @@ Mu_lim_kNm = R_lim_val * b * d**2 / 1e6
 # 2. Check if doubly reinforced section is required
 is_doubly_required = Mu > Mu_lim_kNm
 
-st.info(f"Limiting Moment $\mathbf{{M_{{u, \lim}}}}$: **{Mu_lim_kNm:.2f} kNm**")
+st.info(rf"Limiting Moment $\mathbf{{M_{{u, \lim}}}}$: **{Mu_lim_kNm:.2f} kNm**")
 
 if not is_doubly_required:
-    st.success(f"**$\mathbf{{M_u}}$ ({Mu:.2f} kNm) $\leq$ $\mathbf{{M_{{u, \lim}}}}$ ({Mu_lim_kNm:.2f} kNm). Doubly reinforced section is {OK}. Proceed with singly reinforced design.")
+    st.success(rf"**$\mathbf{{M_u}}$ ({Mu:.2f} kNm) $\leq$ $\mathbf{{M_{{u, \lim}}}}$ ({Mu_lim_kNm:.2f} kNm). Doubly reinforced section is {OK}. Proceed with singly reinforced design.")
     st.stop() # Stops execution if singly reinforced design is sufficient
 
-st.error(f"**$\mathbf{{M_u}}$ ({Mu:.2f} kNm) $>$ $\mathbf{{M_{{u, \lim}}}}$ ({Mu_lim_kNm:.2f} kNm). Doubly reinforced section is {NOT_OK}.")
+st.error(rf"**$\mathbf{{M_u}}$ ({Mu:.2f} kNm) $>$ $\mathbf{{M_{{u, \lim}}}}$ ({Mu_lim_kNm:.2f} kNm). Doubly reinforced section is {NOT_OK}.")
 st.markdown("---")
 
 # 3. Splitting the moment
@@ -200,9 +200,9 @@ Mu2_kNm = Mu - Mu_lim_kNm
 st.header("Moment Components")
 c_m1, c_m2 = st.columns(2)
 with c_m1:
-    st.markdown(f"Moment resisted by concrete & $\mathbf{{A_{{st1}}}}$ ($\mathbf{{M_{{u, \lim}}}}$): {blue(f'{Mu_lim_kNm:.2f} kNm')}")
+    st.markdown(rf"Moment resisted by concrete & $\mathbf{{A_{{st1}}}}$ ($\mathbf{{M_{{u, \lim}}}}$): {blue(f'{Mu_lim_kNm:.2f} kNm')}")
 with c_m2:
-    st.markdown(f"Remaining moment resisted by $\mathbf{{A_{{sc}}}}$ & $\mathbf{{A_{{st2}}}}$ ($\mathbf{{M_{{u2}}}}$): {red(f'{Mu2_kNm:.2f} kNm')}")
+    st.markdown(rf"Remaining moment resisted by $\mathbf{{A_{{sc}}}}$ & $\mathbf{{A_{{st2}}}}$ ($\mathbf{{M_{{u2}}}}$): {red(f'{Mu2_kNm:.2f} kNm')}")
 
 # 4. Stress in Compression Steel (fsc)
 d_prime_over_d = d_prime / d
@@ -211,7 +211,8 @@ fsc = fsc_calc(fy, d_prime_over_d)
 st.header("Compression Steel Stress Check")
 label(f"{blue('d\'/d ratio')}: {d_prime_over_d:.3f}")
 d_prime_over_xu_max = d_prime_over_d / xu_max_ratio(fy)
-label(f"{blue('d\' / x$_{u,max}$ ratio')}: {d_prime_over_xu_max:.3f} (Used for $f_{{sc}}$ determination from IS 456 Annex E)")
+# Use double backslashes for the $\mathbf{x_{u,max}}$ LaTeX in f-strings for robustness
+label(f"{blue('d\' / x$_{{u,max}}$ ratio')}: {d_prime_over_xu_max:.3f} (Used for $f_{{sc}}$ determination from IS 456 Annex E)")
 
 # Display fsc check result
 if fsc >= 0.87 * fy - 1e-3: 
@@ -241,25 +242,26 @@ st.header("Required Reinforcement Areas (IS 456:2000) 🎯")
 
 c_ast1, c_asc, c_ast2, c_ast_total = st.columns(4)
 with c_ast1:
-    st.markdown(f"**$\mathbf{{A_{{st1}}}}$ (mm²)**: (from $\text{M}_{u, \lim}$)")
+    # Removed \text{M} and switched to $M$
+    st.markdown(r"**$\mathbf{A_{st1}}$ (mm²)**: (from $\mathbf{M}_{u, \lim}$)") 
     st.info(f"{Ast1:.2f}")
 with c_asc:
-    st.markdown(f"**$\mathbf{{A_{{sc}}}}$ (mm²)**: (Compression Steel)")
+    st.markdown(r"**$\mathbf{A_{sc}}$ (mm²)**: (Compression Steel)")
     st.info(f"{Asc:.2f}")
 with c_ast2:
-    st.markdown(f"**$\mathbf{{A_{{st2}}}}$ (mm²)**: (from $\text{M}_{u2}$)")
+    st.markdown(r"**$\mathbf{A_{st2}}$ (mm²)**: (from $\mathbf{M}_{u2}$)")
     st.info(f"{Ast2:.2f}")
 with c_ast_total:
-    st.markdown(f"**$\mathbf{{A_{{st, total}}}}$ (mm²)**: ($\text{A}_{st1} + \text{A}_{st2}$)")
+    st.markdown(r"**$\mathbf{A_{st, total}}$ (mm²)**: ($\mathbf{A}_{st1} + \mathbf{A}_{st2}$)")
     st.info(f"{Ast_total:.2f}")
 
 # --- Summary ---
 st.markdown("---")
 st.header("Design Summary 📝")
-st.markdown(f"""
+st.markdown(rf"""
 - **Design Factored Moment $\mathbf{{M_u}}$**: {Mu:.2f} kNm
 - **Limiting Moment $\mathbf{{M_{{u, \lim}}}}$**: {Mu_lim_kNm:.2f} kNm
 - **Required Tension Steel ($\mathbf{{A_{{st, total}}}}$)**: **{Ast_total:.2f} mm²**
 - **Required Compression Steel ($\mathbf{{A_{{sc}}}}$)**: **{Asc:.2f} mm²**
-- *Note: $\text{{A}}_{{st}}$ must also satisfy minimum and maximum area requirements.*
+- *Note: $\mathbf{{A}}_{{st}}$ must also satisfy minimum and maximum area requirements.*
 """)
