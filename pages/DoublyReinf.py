@@ -84,7 +84,54 @@ def fsc_calc(fy, d_prime_over_d):
 # --- CSS for Tighter Mobile/Print Layout ---
 st.markdown("""
 <style>
-/* ... (CSS block truncated for brevity, identical to previous version) ... */
+/* Overall reduction in spacing (padding and margin) for mobile/A4 */
+.st-emotion-cache-18ni7ap, 
+.st-emotion-cache-1wb9b6h { 
+    padding-left: 0.5rem !important;
+    padding-right: 0.5rem !important;
+}
+
+/* Smaller font size for markdown headers and labels */
+h1, h2, h3, h4, .stMarkdown, .st-emotion-cache-vdhr9j {
+    font-size: 0.9rem; 
+    line-height: 1.2;
+}
+
+/* Tighter text and smaller fonts for labels/results */
+span, label {
+    font-size: 0.8rem !important;
+}
+
+/* Smaller selectboxes and number inputs */
+.stSelectbox, .stNumberInput {
+    height: 30px; 
+}
+.stSelectbox>div>div, .stNumberInput>div>div>input {
+    min-height: 30px !important;
+    padding: 2px 5px !important; 
+    font-size: 0.8rem !important;
+}
+
+/* Tighter columns (less spacing between elements) */
+.st-emotion-cache-p2n2mc, .st-emotion-cache-16ya12x { 
+    gap: 0.5rem; 
+}
+
+/* Print-friendly: Ensure content is legible on A4 and hide Streamlit UI */
+@media print {
+    .st-emotion-cache-6v09g0, 
+    .st-emotion-cache-1avcm0d {
+        display: none !important;
+    }
+    .st-emotion-cache-1vq4p4c {
+        max-width: 100% !important;
+    }
+    body {
+        -webkit-print-color-adjust: exact;
+        background-color: white !important;
+        color: black !important;
+    }
+}
 </style>
 """, unsafe_allow_html=True)
 # ---------------------------------------------
