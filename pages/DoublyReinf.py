@@ -78,6 +78,17 @@ def label(md): st.markdown(md, unsafe_allow_html=True)
 
 # ---------- Helpers (IS 456-2000 Specific) ----------
 
+# Constants for fsc_calc (IS 456 Annex E) - Stress (fsc in N/mm²) vs d'/xu,max ratio * 100
+FY415_FSC_TABLE = {
+    0.0: 360.9, 10.0: 360.9, 20.0: 351.8, 30.0: 342.8, 
+    40.0: 333.7, 50.0: 324.6, 60.0: 315.5, 70.0: 306.4
+}
+FY500_FSC_TABLE = {
+    0.0: 434.8, 10.0: 434.8, 20.0: 424.4, 30.0: 411.3, 
+    40.0: 395.1, 50.0: 370.5, 60.0: 347.5, 70.0: 324.5
+}
+
+
 # Max xu/d ratio based on steel grade (Cl 38.1)
 def xu_max_ratio(fy):
     if fy <= 250: return 0.53
@@ -91,45 +102,39 @@ def R_lim(fck, fy):
 
 # Stress in compression steel (fsc) in N/mm² based on fy and d'/d (IS 456 Annex E)
 def fsc_calc(fy, d_prime_over_d):
-    xu_d_max = xu_max_ratio(fy)
-    d_prime_over_xu_max = d_prime_over_d / xu_d_max
-    
-    # Stress values fsc (N/mm²) for d'/xu_max ratios (0.0, 0.1, 0.2, 0.3...)
-    # Reference: IS 456:2000 Table E.1 and E.2 
+    """Calculates fsc using interpolation from IS 456 Annex E tables."""
     
     if fy == 250:
         return 0.87 * fy
     
+    xu_d_max = xu_max_ratio(fy)
+    d_prime_over_xu_max = d_prime_over_d / xu_d_max
+    ratio_pct = d_prime_over_xu_max * 100 # Convert ratio for easy table lookup
+    
     if fy == 415:
-        ratios = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
-        fsc_vals = [360.9, 360.9, 351.8, 342.8, 333.7, 324.6, 315.5, 306.4]
-    
+        fsc_table = FY415_FSC_TABLE
     elif fy == 500:
-        ratios = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
-        fsc_vals = [434.8, 434.8, 424.4, 411.3, 395.1, 370.5, 347.5, 324.5]
-    
+        fsc_table = FY500_FSC_TABLE
     else:
         # Fallback for custom fy: assume compression steel yields (conservative)
         return 0.87 * fy
 
-    # Simple linear interpolation for d'/xu_max
-    if d_prime_over_xu_max <= ratios[0]: return fsc_vals[0]
-    if d_prime_over_xu_max >= ratios[-1]: return fsc_vals[-1]
+    ratios = sorted(fsc_table.keys())
+    fsc_vals = [fsc_table[r] for r in ratios]
+    
+    # Boundary checks
+    if ratio_pct <= ratios[0]: return fsc_vals[0]
+    if ratio_pct >= ratios[-1]: return fsc_vals[-1]
 
-    # Robust index finding using a standard loop (REPLACEMENT FOR next() generator)
-    idx = 0
-    for i, r in enumerate(ratios):
-        if r > d_prime_over_xu_max:
-            idx = i
-            break
+    # Find the interpolation interval
+    idx = next(i for i, r in enumerate(ratios) if r > ratio_pct)
     
     r0, r1 = ratios[idx - 1], ratios[idx]
     f0, f1 = fsc_vals[idx - 1], fsc_vals[idx]
     
     # Linear interpolation formula
-    fsc = f0 + (f1 - f0) * (d_prime_over_xu_max - r0) / (r1 - r0)
+    fsc = f0 + (f1 - f0) * (ratio_pct - r0) / (r1 - r0)
     
-    # Ensure fsc is capped at 0.87*fy and is never negative
     return min(fsc, 0.87 * fy)
 
 
@@ -141,7 +146,7 @@ st.title(header_text)
 st.markdown("---")
 
 # ---------- Materials & Geometry ----------
-st.header("Materials & Geometry (Inputs)")
+st.header("Materials & Geometry (Inputs) 🧱")
 st.markdown("""
 **📝 NARRATIVE:** Required when $M_u$ exceeds the limiting moment capacity $M_{u, \lim}$.
 - **$d$**: Effective depth to tension steel.
@@ -167,7 +172,7 @@ with c5:
 st.markdown("---")
 
 # ---------- Actions (Factored) ----------
-st.header("Factored Moment $\mathbf{M_u}$")
+st.header("Factored Moment $\mathbf{M_u}$ ⚙️")
 c1, c2 = st.columns(2)
 with c1:
     st.markdown(blue("Mu (kNm)"), unsafe_allow_html=True)
@@ -234,7 +239,7 @@ Ast_total = Ast1 + Ast2
 
 # --- FINAL RESULTS ---
 st.markdown("---")
-st.header("Required Reinforcement Areas (IS 456:2000)")
+st.header("Required Reinforcement Areas (IS 456:2000) 🎯")
 
 c_ast1, c_asc, c_ast2, c_ast_total = st.columns(4)
 with c_ast1:
@@ -252,7 +257,7 @@ with c_ast_total:
 
 # --- Summary ---
 st.markdown("---")
-st.header("Design Summary")
+st.header("Design Summary 📝")
 st.markdown(f"""
 - **Design Factored Moment $\mathbf{{M_u}}$**: {Mu:.2f} kNm
 - **Limiting Moment $\mathbf{{M_{{u, \lim}}}}$**: {Mu_lim_kNm:.2f} kNm
