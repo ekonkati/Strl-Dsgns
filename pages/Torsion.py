@@ -80,7 +80,7 @@ STIRRUP_OPTIONS = [6, 8, 10, 12]
 
 # ---------- Helpers (Shear/Torsion Specific) ----------
 
-# Tau_c Table (Same as Item 1, for reference)
+# Tau_c Table (Table 19, IS 456)
 TAU_C_TABLE = pd.DataFrame(
     data=[
         [0.28, 0.29, 0.30, 0.31, 0.31],
@@ -137,7 +137,6 @@ st.markdown("---")
 st.header("Materials & Geometry (Inputs)")
 st.markdown("""
 **📝 NARRATIVE: Input Parameters**
-
 - **$f_{ck}$** is the characteristic strength of the concrete.
 - **$b$ and $D$** are the beam's width and overall depth.
 - **$d$ (Effective Depth)** is the distance from the compression face to the centroid of the tension reinforcement.
@@ -163,8 +162,7 @@ st.markdown("---")
 st.header("Actions (Factored $M_u, V_u, T_u$)")
 st.markdown("""
 **📝 NARRATIVE: Design Actions**
-
-- **$M_u$**: Factored Bending Moment (Maximum).
+- **$M_u$**: Factored Bending Moment.
 - **$V_u$**: Factored Shear Force.
 - **$T_u$**: Factored Torsional Moment.
 """)
@@ -188,7 +186,7 @@ Me1 = Mu + Mt
 Me2 = Mu - Mt
 
 # 2. Equivalent Shear Ve (Clause 41.3.1)
-Ve = Vu + 1.6 * (Tu * 1e6) / b / 1e3 # Vu + 1.6 * Tu/b (using N and mm to ensure unit consistency, then back to kN)
+Ve = Vu + 1.6 * (Tu * 1e6) / b / 1e3 # Vu + 1.6 * Tu/b (units conversion: Tu*1e6/1e3 converts kNm to N-mm, then to kN-mm/mm/1e3 to get kN)
 
 # 3. Nominal Shear Stress Tve (Clause 41.3.1)
 Tve = Ve * 1e3 / (b * d) # N/mm2
@@ -198,7 +196,7 @@ st.markdown("---")
 # ---------- Equivalent Forces Results ----------
 st.header("Equivalent Design Forces (IS 456:2000 Cl 41)")
 st.markdown("""
-The applied forces are converted into equivalent design forces for use in standard flexural and shear design methods.
+The applied forces are converted into equivalent design forces ($\mathbf{M_{e1}, M_{e2}}$ and $\mathbf{V_e}$) for use in standard flexural and shear design methods.
 """)
 
 label(f"{blue('Torsional Moment (Mt)')} = $T_u(1 + D/b)/1.7$")
@@ -225,7 +223,7 @@ with c_ve[3]:
     if shear_check_ok:
         st.success("Torsion Check: OK")
     else:
-        st.error("Torsion Check: FAIL (Increase section size)")
+        st.error(f"Torsion Check: FAIL (Increase section size as $\\tau_{{ve}} > \\tau_{{c,max}}$)")
 
 st.markdown("---")
 
@@ -233,14 +231,12 @@ st.markdown("---")
 st.header("Transverse Shear Design (Based on $V_e$)")
 st.markdown("""
 **📝 NARRATIVE: Stirrup Requirement**
-
-The required shear reinforcement ($\text{A}_{sv}$ spacing) is now determined using the Equivalent Shear, $\text{V}_e$. The required $\text{A}_{st}$ for $\text{M}_{e1}$ (tension face) is needed to calculate the concrete shear capacity ($\tau_c$).
+The required shear reinforcement ($\text{A}_{sv}$ spacing) is determined using the **Equivalent Shear, $\text{V}_e$**. The actual tension steel ratio ($\text{p}_t$) based on $\text{M}_{e1}$ is required to find the concrete shear capacity ($\tau_c$).
 """)
 
 c_pt, c_phi, c_fy = st.columns(3)
 with c_pt:
     st.markdown(blue("pt (Tension Steel Ratio % prov.)"), unsafe_allow_html=True)
-    # The user must input the actual tension steel ratio provided based on Me1 design
     pt_prov = st.number_input("pt_prov", value=0.5, step=0.05, min_value=0.0, format="%f", help="Based on Me1 design", label_visibility="collapsed")
 with c_phi:
     st.markdown(blue("Stirrup dia (mm)"), unsafe_allow_html=True)
@@ -272,21 +268,9 @@ with c_s_user:
     st.markdown(blue("User spacing s (mm)"), unsafe_allow_html=True)
     s_user = st.number_input("s_user", value=150, min_value=25, step=5, label_visibility="collapsed")
 
-Asv = legs * (0.25 * math.pi * float(phi_sv_local)**2)
-Vus_user_N = Vus_req * 1e3 # Convert Vus_req to N
-
-# Calculate required spacing based on Vus_req
-s_demand = (0.87 * fy_sv_val * Asv * d) / Vus_user_N if Vus_user_N > 1e-9 else 1e9
-
-# Check Spacing Limits (Cl 41.4.3 & 26.5.1.5)
-s_max_code = min(x1, y1) / 4 + (D/10) # Where x1, y1 are center-to-center dimensions of the corner longitudinal bars
-s_max = min(0.75 * d, 300.0) # From non-torsional shear rules
-s_max_torsion = min(b, D) + 100 # Not explicitly IS 456, but a rule of thumb. Sticking to IS 456 limits.
-
-s_ctrl = s_demand
-s_max_ctrl = min(s_demand, s_max) # Controlling spacing is min(demand, max)
-
-# The user must provide a longitudinal bar arrangement for x1, y1 dimensions.
+# ----------------------------------------------------
+# MOVED: Longitudinal Bar Configuration (must come BEFORE s_max calculation)
+# ----------------------------------------------------
 st.markdown("##### Longitudinal Bar Configuration (for Spacing Check)")
 c_dim = st.columns(2)
 with c_dim[0]:
@@ -295,12 +279,36 @@ with c_dim[0]:
 with c_dim[1]:
     st.markdown(blue("$y_1$ (c/c vertical dim, mm)"), unsafe_allow_html=True)
     y1 = st.number_input("y1", value=540.0, step=5.0, min_value=1.0, format="%f", help="Centre-to-centre distance of the outermost longitudinal bars in the direction of depth 'D'", label_visibility="collapsed")
+# ----------------------------------------------------
 
+Asv = legs * (0.25 * math.pi * float(phi_sv_local)**2)
+Vus_user_N = Vus_req * 1e3 # Convert Vus_req to N
+
+# Calculate required spacing based on Vus_req
+s_demand = (0.87 * fy_sv_val * Asv * d) / Vus_user_N if Vus_user_N > 1e-9 else 1e9
+
+# Check Spacing Limits (Cl 41.4.3)
 s_max_41 = min(x1, y1) / 4.0 + (D / 10.0)
-s_max_41_min = min(s_max_41, x1, 300) # IS 456 Cl 26.5.3.6 (e)
+s_max_code_cl_26 = min(0.75 * d, 300.0)
+s_max_ctrl = min(s_max_41, s_max_code_cl_26, x1) # Cl 41.4.3 (c) limits spacing to min(s_max_41, x1, 300)
 
-provide_ok = (s_user <= s_demand) and (s_user <= s_max_41_min) and (Vus_req > 0 or s_user <= s_max)
+provide_ok = (s_user <= s_demand) and (s_user <= s_max_ctrl)
 
 label(f"{blue('s by Vus demand (≤)')} = {red(f'{s_demand:.0f} mm')} &nbsp; "
-      f"{blue('s by Cl 41.4.3 (≤)')} = {red(f'{s_max_41_min:.0f} mm')}" )
+      f"{blue('s by Cl 41.4.3 (≤)')} = {red(f'{s_max_ctrl:.0f} mm')}" )
 label(f"{blue('User s check')} = {OK if provide_ok else NOT_OK}" )
+
+# --- Summary for Torsion App ---
+st.markdown("---")
+st.header("Summary (Torsion Design)")
+items = []
+items.append(("Equivalent Moment Me1", f"{Me1:.2f} kNm", "N/A", True))
+items.append(("Equivalent Moment Me2", f"{Me2:.2f} kNm", "N/A", True))
+items.append(("Equivalent Shear Ve", f"{Ve:.2f} kN", f"{Vc:.2f} kN", Ve < Vc))
+items.append(("Torsion Max Stress Check", f"Max {Tc_max:.3f} N/mm²", f"Actual {Tve:.3f} N/mm²", shear_check_ok))
+items.append(("Stirrups Spacing", f"≤ {min(s_demand, s_max_ctrl):.0f} mm", f"{s_user:.0f} mm", provide_ok))
+
+df = pd.DataFrame([{"Check": n, "Required/Limit": r, "Provided/Actual": p, "OK": "Yes" if ok else "No"} for (n,r,p,ok) in items])
+st.dataframe(df, hide_index=True, use_container_width=True)
+overall = all(ok for (_,_,_,ok) in items if n != "Equivalent Moment Me1" and n != "Equivalent Moment Me2")
+st.success("Overall: PASS ✅" if overall else "Overall: CHECK ❌")
