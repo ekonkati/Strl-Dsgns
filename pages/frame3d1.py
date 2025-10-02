@@ -35,7 +35,7 @@ class Element:
             (self.end_node.z - self.start_node.z)**2
         )
 
-    # --- Stiffness and Transformation Matrix methods (Omitted for brevity) ---
+    # --- Stiffness and Transformation Matrix methods ---
     def get_local_stiffness_matrix(self):
         E, G = self.props['E'], self.props['G']
         A, Iyy, Izz, J = self.props['A'], self.props['Iyy'], self.props['Izz'], self.props['J']
@@ -94,8 +94,12 @@ class Structure:
             self.elements[id] = Element(id, self.nodes[start_node_id], self.nodes[end_node_id], props)
         return self.elements.get(id)
 
+    # *** FIX: Re-inserting the missing set_support method ***
+    def set_support(self, node_id, restraints):
+        if node_id in self.nodes: self.nodes[node_id].restraints = restraints
+    # *******************************************************
+
     def assemble_matrices(self):
-        # (Omitted for brevity)
         num_dof = len(self.nodes) * 6
         self.K_global, self.F_global = np.zeros((num_dof, num_dof)), np.zeros(num_dof)
         dof_index = 0
@@ -112,25 +116,15 @@ class Structure:
 
     def add_wall_loads(self, wall_load_data):
         """Applies UDL loads on specified element IDs as equivalent nodal forces (Fz)."""
-        # NOTE: This only applies EQUIVALENT NODAL FORCES. The moment calculation in 
-        # plot_2d_frame must account for the UDL between the nodes.
         for elem_id, load_q in wall_load_data.items():
             if elem_id in self.elements:
                 beam = self.elements[elem_id]
-                # Assuming load is vertically (Global -Z, index 2)
                 load_at_node_shear = load_q * beam.length / 2 
-                load_at_node_moment = load_q * beam.length**2 / 12 # Fixed end moments for UDL
                 
                 # Apply load_at_node_shear in -Z direction (index 2 for Fz)
                 self.F_global[self.dof_map[(beam.start_node.id, 2)]] -= load_at_node_shear
                 self.F_global[self.dof_map[(beam.end_node.id, 2)]] -= load_at_node_shear
                 
-                # Apply fixed-end moments (index 4=My, index 5=Mz) in 3D. Assuming Mz for bending moment (index 5)
-                # Convention: M_start = -wL^2/12, M_end = +wL^2/12 (Local coordinates)
-                # Since the global force vector is used, this is more complex.
-                # Simplification: Only applying shear forces for basic FEA, rely on plot_2d_frame for internal moment calculation.
-                pass 
-
     def solve(self):
         active_dofs = [self.dof_map[(n.id, i)] for n in self.nodes.values() for i in range(6) if not n.restraints[i]]
         active_dofs = np.array(active_dofs)
@@ -156,19 +150,18 @@ class Structure:
             
             elem.results = {keys[i]: f_local[i] for i in range(12)}
             elem.results['Max_Abs_Moment'] = max(abs(f_local[4]), abs(f_local[5]), abs(f_local[10]), abs(f_local[11]))
-            # Store displacement for 2D deflection plot
             elem.results['Disp_Global_Start'] = u_global_elem[:6]
             elem.results['Disp_Global_End'] = u_global_elem[6:]
 
     def calculate_reactions(self):
         if self.U_global is None: return
-        R = self.K_global @ self.U_global # No F_global subtraction if we only want end forces/moments
+        R = self.K_global @ self.U_global
         for node in self.nodes.values():
             if any(node.restraints):
                 for i in range(6):
                     if node.restraints[i]: node.reactions[i] = R[self.dof_map[(node.id, i)]]
 
-# --- 2. Utility & Calculation Functions (Omitted for brevity) ---
+# --- 2. Utility & Calculation Functions ---
 
 def parse_grid_input(input_string):
     if not input_string: return []
@@ -207,7 +200,7 @@ def parse_and_apply_wall_loads(load_string):
         for elem_id in elem_ids: wall_load_data[elem_id] = load_q
     return wall_load_data
 
-# --- 3. Streamlit Caching & Analysis (Omitted for brevity) ---
+# --- 3. Streamlit Caching & Analysis ---
 
 @st.cache_data
 def generate_and_analyze_structure(x_dims, y_dims, z_dims, col_props, beam_props, load_params, wall_load_data):
@@ -215,38 +208,42 @@ def generate_and_analyze_structure(x_dims, y_dims, z_dims, col_props, beam_props
     x_coords, y_coords, z_coords = [0]+list(np.cumsum(x_dims)), [0]+list(np.cumsum(y_dims)), [0]+list(np.cumsum(z_dims))
     node_id, elem_id, node_map = 1, 1, {}
 
+    # 1. Create Nodes
     for iz, z in enumerate(z_coords):
         for iy, y in enumerate(y_coords):
             for ix, x in enumerate(x_coords):
                 s.add_node(node_id, x, y, z)
                 node_map[(ix, iy, iz)] = node_id
-                if np.isclose(z, 0): s.set_support(node_id, restraints=[True]*6)
+                if np.isclose(z, 0): s.set_support(node_id, restraints=[True]*6) # Support setup
                 node_id += 1
 
+    # 2. Create Elements (Columns)
     for iz in range(len(z_coords)-1):
         for iy in range(len(y_coords)):
             for ix in range(len(x_coords)): 
                 s.add_element(elem_id, node_map[(ix,iy,iz)], node_map[(ix,iy,iz+1)], col_props)
                 elem_id += 1
     
+    # 3. Create Elements (Beams in X-direction)
     for iz in range(1, len(z_coords)):
         for iy in range(len(y_coords)):
             for ix in range(len(x_coords)-1): 
                 s.add_element(elem_id, node_map[(ix,iy,iz)], node_map[(ix+1,iy,iz)], beam_props)
                 elem_id += 1
     
+    # 4. Create Elements (Beams in Y-direction)
     for iz in range(1, len(z_coords)):
         for iy in range(len(y_coords)-1):
             for ix in range(len(x_coords)): 
-                s.add_element(elem_id, node_map[(ix,iy+1,iz)], node_map[(ix,iy,iz)], beam_props) # Note: order matters for T
+                s.add_element(elem_id, node_map[(ix,iy+1,iz)], node_map[(ix,iy,iz)], beam_props)
                 elem_id += 1
     
+    # 5. Assemble and Apply Loads
     s.assemble_matrices()
-    # Gravity load is typically applied on the whole frame based on slab/live load
-    # s.add_gravity_loads(load_params['q_total_gravity'], z_coords[1:])
-    # Specific uniform loads for the 2D case from the user's sketch
+    # s.add_gravity_loads(load_params['q_total_gravity'], z_coords[1:]) # Disabled for 2D case
     s.add_wall_loads(wall_load_data) 
     
+    # 6. Solve and Calculate Results
     success, message = s.solve()
     if success: 
         s.calculate_element_results()
@@ -254,7 +251,6 @@ def generate_and_analyze_structure(x_dims, y_dims, z_dims, col_props, beam_props
     
     if not success: return {'success': False, 'message': message}
 
-    # Store element length for plotting
     elements_data = [{'id':e.id, 'start_node_id':e.start_node.id, 'end_node_id':e.end_node.id, 'start_node_pos':(e.start_node.x,e.start_node.y,e.start_node.z), 'end_node_pos':(e.end_node.x,e.end_node.y,e.end_node.z), 'length':e.length, 'results':e.results} for e in s.elements.values()]
     
     return {
@@ -276,11 +272,9 @@ def get_hover_text(elem):
             text += f"{key.replace('_', ' ')}: {value:.2f} {unit}<br>"
     return text
 
-# UPDATED FUNCTION: Plot 2D frame with result diagrams
 def plot_2d_frame(nodes, elements, plane_axis, coordinate, display_mode, show_values, wall_load_data):
     fig = go.Figure()
     
-    # 1. Filter Nodes and Elements for the 2D plane
     if plane_axis == 'Y': 
         plane_nodes_list, x_key, z_key = [n for n in nodes if np.isclose(n['y'], coordinate)], 'x', 'z'
     else: 
@@ -288,37 +282,56 @@ def plot_2d_frame(nodes, elements, plane_axis, coordinate, display_mode, show_va
         
     plane_node_ids = {n['id'] for n in plane_nodes_list}
 
-    # Map the display mode to the element result key and plotting parameters
     result_map = {
-        'Structure': (None, None, None, 1),
+        'Structure': (None, None, None, 1, 'black'),
         'Bending Moment': ('Moment_Z', 'kNm', 'Deflection in X', 0.2, 'red'), 
         'Shear Force': ('Shear_Z', 'kN', 'Deflection in X', 0.2, 'green'),  
         'Axial Force': ('Axial', 'kN', 'Deflection in X', 0.2, 'blue'),
         'Deflection': (None, 'm', 'Deflection in Z', 100, 'orange'), 
     }
     
-    result_key_base, unit, defl_key, scale_factor_base, diagram_color = result_map.get(display_mode, (None, None, None, 1, 'black'))
+    result_key_base, unit, defl_key, _, diagram_color = result_map.get(display_mode, (None, None, None, 1, 'black'))
 
-    # Calculate max dimension for scaling
+    # Calculate global scale factor for results
     x_coords = [n[x_key] for n in plane_nodes_list]
     z_coords_all = [n[z_key] for n in plane_nodes_list]
     max_dim = max(max(x_coords, default=1) - min(x_coords, default=0), 
                   max(z_coords_all, default=1) - min(z_coords_all, default=0)) or 1
     
-    # Calculate a global scale factor based on max result and max frame dimension
     max_abs_result = 0.0
     if display_mode != 'Structure':
-        max_abs_result = max(abs(e['results'].get(f'{result_key_base}_Start', 0.0)) for e in elements if e['start_node_id'] in plane_node_ids)
-        max_abs_result = max(max_abs_result, max(abs(e['results'].get(f'{result_key_base}_End', 0.0)) for e in elements if e['end_node_id'] in plane_node_ids))
-        max_abs_result = max(max_abs_result, 1e-3) # Prevent division by zero
+        # Get max force/moment value across all relevant elements for scaling
+        relevant_elements = [e for e in elements if e['start_node_id'] in plane_node_ids or e['end_node_id'] in plane_node_ids]
+        max_abs_result = max(abs(e['results'].get(f'{result_key_base}_Start', 0.0)) for e in relevant_elements)
+        max_abs_result = max(max_abs_result, max(abs(e['results'].get(f'{result_key_base}_End', 0.0)) for e in relevant_elements))
+        
+        # Also check mid-span for UDL moment
+        if display_mode == 'Bending Moment':
+            for elem in relevant_elements:
+                w_eff = wall_load_data.get(elem['id'], 0.0)
+                if w_eff > 0 and elem['length'] > 0:
+                    L = elem['length']
+                    M_start = elem['results'].get('Moment_Z_Start', 0.0)
+                    V_start = elem['results'].get('Shear_Z_Start', 0.0)
+                    
+                    # Find max moment point (where V(x)=0)
+                    x_at_V_zero = V_start / w_eff if w_eff > 0 else L/2
+                    x_at_V_zero = np.clip(x_at_V_zero, 0, L)
+                    
+                    # Mid-span moment formula: M(x) = M_start + V_start*x - w*x^2/2
+                    M_mid = M_start + V_start * x_at_V_zero - w_eff * x_at_V_zero**2 / 2
+                    max_abs_result = max(max_abs_result, abs(M_mid))
+
+        max_abs_result = max(max_abs_result, 1e-3) # Safety against division by zero
         
     # Scale factor: 1/8th of the max frame dimension, divided by the max result
-    # We use 1/8 to ensure the diagram is visible but doesn't completely overwhelm the frame.
     global_scale = (max_dim / 8.0) / max_abs_result if display_mode != 'Structure' and display_mode != 'Deflection' else 1.0
     
-    # Deflection scale is fixed and high for visualization
     if display_mode == 'Deflection':
-        global_scale = 1000 * max_dim # Highly exaggerated scale
+        # Find max deflection for scaling
+        max_abs_defl = max(abs(e['results'].get('Disp_Global_Start', np.zeros(6))[2]) for e in relevant_elements)
+        max_abs_defl = max(max_abs_defl, max(abs(e['results'].get('Disp_Global_End', np.zeros(6))[2]) for e in relevant_elements)) or 1e-6
+        global_scale = max_dim / (max_abs_defl * 10) # Target 10% of frame size for max deflection
 
     # 2. Iterate and Plot Elements and Diagrams
     for elem in elements:
@@ -337,135 +350,101 @@ def plot_2d_frame(nodes, elements, plane_axis, coordinate, display_mode, show_va
             fig.add_trace(go.Scatter(x=x_coords_frame, y=z_coords_frame, mode='lines', line=dict(color='darkblue', width=3), 
                                      hoverinfo='text', hovertext=get_hover_text(elem), showlegend=False))
             
-            # --- RESULT DIAGRAMS ---
+            # --- RESULT DIAGRAMS (Loads, Moments, Shear, Deflection) ---
             if display_mode != 'Structure':
                 
-                # A. Prepare points for the curve
-                num_points = 51 if display_mode in ['Bending Moment', 'Shear Force'] else 2
+                num_points = 51 if display_mode in ['Bending Moment', 'Shear Force'] else 21
                 local_x = np.linspace(0, L, num_points)
                 diagram_coords = []
-                
+                value_at_point = []
+
                 w_eff = wall_load_data.get(elem['id'], 0.0)
                 
-                val_start = elem['results'].get(f'{result_key_base}_Start', 0.0)
-                val_end = elem['results'].get(f'{result_key_base}_End', 0.0)
-
-                # Determine the member's orientation
-                is_horizontal = np.isclose(start_z, end_z)
-                
-                # ----------------------------------------------------
-                # Core Logic: Calculating Internal Force/Moment/Deflection
-                # ----------------------------------------------------
-                
-                if display_mode in ['Bending Moment', 'Shear Force']:
-                    # Assuming local Mz (index 5, 11) is the primary bending moment for beams in this X-Z plane
-                    M_start = elem['results'].get('Moment_Z_Start', 0.0)
-                    V_start = elem['results'].get('Shear_Z_Start', 0.0)
+                M_start = elem['results'].get('Moment_Z_Start', 0.0)
+                V_start = elem['results'].get('Shear_Z_Start', 0.0)
+                Axial_start = elem['results'].get('Axial_Start', 0.0)
+                Axial_end = elem['results'].get('Axial_End', 0.0)
+                u_start = elem['results'].get('Disp_Global_Start', np.zeros(6))
+                u_end = elem['results'].get('Disp_Global_End', np.zeros(6))
                     
-                    for x in local_x:
-                        if L == 0: value = 0.0
-                        elif result_key_base == 'Moment_Z':
-                            # Internal Moment M(x) = M_start + V_start*x - w*x^2/2 (Standard beam convention)
-                            # NOTE: FEA forces are the **reversal** of the internal action.
-                            # We use the calculated V_start and M_start from FEA.
-                            # If load 'w' is applied, the moment equation must include it.
-                            # M_int(x) = M_end_start + V_end_start*x + w*x* (L-x)/2 (UDL on simply supported, not what we have)
-                            # M_int(x) = M_start + V_start*x + w*(x^2)/2 (If V_start is the shear at x=0)
-                            # The most robust way is to use the FEA end forces and the UDL:
-                            # M(x) = M_start + V_start * x - w_eff * x**2 / 2
-                            # *Sign correction for plotting:* FEA gives local end moments. For tension-side plotting (standard), we need to negate.
-                            value = M_start + V_start * x - w_eff * x**2 / 2
-                        elif result_key_base == 'Shear_Z':
-                            # Internal Shear V(x) = V_start - w*x
-                            value = V_start - w_eff * x
-                        else: value = 0.0
-                        
-                        diagram_coords.append((x, value))
-
-                elif display_mode == 'Axial Force':
-                    # Axial force is constant on a non-loaded member (linear interpolation works)
-                    for x in local_x:
-                        value = val_start + (val_end - val_start) * (x / L) if L > 0 else 0
-                        diagram_coords.append((x, value))
-                        
-                elif display_mode == 'Deflection':
-                    u_start = elem['results'].get('Disp_Global_Start', np.zeros(6))
-                    u_end = elem['results'].get('Disp_Global_End', np.zeros(6))
+                for x in local_x:
+                    value = 0.0
                     
-                    for x in local_x:
-                        # Linear interpolation of global displacement for visualization (cubic is complex)
-                        if L > 0:
-                            if defl_key == 'Deflection in Z':
-                                disp_start, disp_end = u_start[2], u_end[2] # Global Uz
-                            elif defl_key == 'Deflection in X':
-                                disp_start, disp_end = u_start[0], u_end[0] # Global Ux
-                            else: continue
-                            value = disp_start + (disp_end - disp_start) * (x / L)
-                        else: value = 0.0
-                        diagram_coords.append((x, value))
-                        
-                # ----------------------------------------------------
-                
-                # B. Convert Local Diagram Coords to Global Plotting Coords
-                diag_x, diag_z = [], []
-                value_at_point = []
-                
-                for x_local, value in diagram_coords:
+                    if L == 0: value = 0.0
+                    elif result_key_base == 'Moment_Z':
+                        # Parabolic Moment: M(x) = M_start + V_start*x - w*x^2/2
+                        value = M_start + V_start * x - w_eff * x**2 / 2
+                    elif result_key_base == 'Shear_Z':
+                        # Linear Shear: V(x) = V_start - w*x
+                        value = V_start - w_eff * x
+                    elif result_key_base == 'Axial':
+                        # Linear interpolation for Axial (constant for pure axial)
+                        value = Axial_start + (Axial_end - Axial_start) * (x / L)
+                    elif display_mode == 'Deflection':
+                        # Linear interpolation of global displacement for visualization
+                        if defl_key == 'Deflection in Z':
+                            disp_start, disp_end = u_start[2], u_end[2] # Global Uz
+                        elif defl_key == 'Deflection in X':
+                            disp_start, disp_end = u_start[0], u_end[0] # Global Ux
+                        else: continue
+                        value = disp_start + (disp_end - disp_start) * (x / L)
+
                     value_at_point.append(value)
-                    
-                    # Calculate position along the member
-                    # dx_mem = x_coords_frame[1] - x_coords_frame[0]
-                    # dz_mem = z_coords_frame[1] - z_coords_frame[0]
-                    
-                    # Normalized vector along the member
+
+                    # Convert Local (x, value) to Global Plotting Coordinates (x_plot, z_plot)
                     if L > 0:
                         nx = (x_coords_frame[1] - x_coords_frame[0]) / L
                         nz = (z_coords_frame[1] - z_coords_frame[0]) / L
                     else: nx, nz = 1, 0
                     
-                    # Normalized vector perpendicular to the member (for offset)
-                    # Perpendicular vector (n_perp) = [-nz, nx] (rotated 90 deg clockwise)
                     nx_perp = -nz 
                     nz_perp = nx 
                     
-                    # Current position on the member
-                    x_mid = x_coords_frame[0] + nx * x_local
-                    z_mid = z_coords_frame[0] + nz * x_local
+                    x_mid = x_coords_frame[0] + nx * x
+                    z_mid = z_coords_frame[0] + nz * x
                     
-                    # Apply offset (negate value for standard moment/shear plotting)
+                    # Negate value for standard moment/shear plotting (tension side)
                     plot_value = value * global_scale * (-1 if display_mode in ['Bending Moment', 'Shear Force'] else 1)
 
                     x_plot = x_mid + nx_perp * plot_value
                     z_plot = z_mid + nz_perp * plot_value
                     
-                    diag_x.append(x_plot)
-                    diag_z.append(z_plot)
+                    diagram_coords.append((x_plot, z_plot))
 
+                diag_x = [c[0] for c in diagram_coords]
+                diag_z = [c[1] for c in diagram_coords]
+
+                is_horizontal = np.isclose(start_z, end_z)
+                
                 # Add diagram trace 
-                fig.add_trace(go.Scatter(x=diag_x, y=diag_z, mode='lines', line=dict(color=diagram_color, width=2), 
-                                         fill='tozeroy' if is_horizontal else 'tozerox', opacity=0.3 if display_mode != 'Deflection' else 0,
+                fig.add_trace(go.Scatter(x=diag_x, y=diag_z, mode='lines', line=dict(color=diagram_color, width=2, dash='solid' if display_mode != 'Deflection' else 'dash'), 
+                                         fill='tozeroy' if is_horizontal and display_mode != 'Deflection' else 'tozerox' if display_mode != 'Deflection' else None, 
+                                         opacity=0.3 if display_mode != 'Deflection' else 1,
                                          hoverinfo='none', name=f"{display_mode} E{elem['id']}"))
                 
                 # C. Plot Values if toggled
-                if show_values and display_mode != 'Deflection':
-                    # Find max/min values for labeling
-                    val_abs_max = max(abs(v) for v in value_at_point)
+                if show_values and display_mode != 'Deflection' and abs(max(value_at_point, key=abs)) > 1e-3:
                     
-                    # Label positions (Start, End, and Mid-span only)
-                    label_indices = [0, len(local_x) - 1] # Start and End
-                    if display_mode == 'Bending Moment': label_indices.append(np.argmax(np.abs(value_at_point))) # Max moment position
+                    # Label positions: Start (0), End (L), and Max/Min position
+                    label_indices = [0, len(local_x) - 1] 
+                    if display_mode == 'Bending Moment' and len(value_at_point) > 2: 
+                        label_indices.append(np.argmax(np.abs(value_at_point)))
                     
                     for idx in sorted(list(set(label_indices))):
                         val = value_at_point[idx]
-                        if abs(val) < 1e-3: continue # Skip near-zero values
+                        if abs(val) < 1e-1: continue 
                         
                         fig.add_annotation(
                             x=diag_x[idx], y=diag_z[idx],
-                            text=f"{val:.2f}",
+                            text=f"{val:.1f}",
                             showarrow=False,
-                            xshift=nx_perp * (val * global_scale * 10), # Slight offset perpendicular to the member
-                            yshift=nz_perp * (val * global_scale * 10),
-                            font=dict(color=diagram_color, size=10),
+                            xshift=nx_perp * (val * global_scale * 10 * (-1 if display_mode in ['Bending Moment', 'Shear Force'] else 1)),
+                            yshift=nz_perp * (val * global_scale * 10 * (-1 if display_mode in ['Bending Moment', 'Shear Force'] else 1)),
+                            font=dict(color='black', size=10, weight='bold'),
+                            bgcolor="rgba(255, 255, 255, 0.7)",
+                            bordercolor=diagram_color,
+                            borderwidth=1,
+                            borderpad=2
                         )
                         
 
@@ -474,32 +453,30 @@ def plot_2d_frame(nodes, elements, plane_axis, coordinate, display_mode, show_va
                              mode='markers', marker=dict(size=8, color='purple'), name='Nodes', 
                              text=[f"Node {n['id']}" for n in plane_nodes_list], hoverinfo='text', showlegend=False))
 
-    title_scale = f" (Scale: 1:{1/global_scale:.0f})" if display_mode in ['Bending Moment', 'Shear Force', 'Axial Force'] else ""
+    title_scale = f" (Scale: 1:{int(max_dim/(max_abs_result/8.0)):,})" if display_mode in ['Bending Moment', 'Shear Force', 'Axial Force'] else ""
     title_scale_def = f" (Exaggerated Scale)" if display_mode == 'Deflection' else ""
     
-    fig.update_layout(title=f"2D Elevation: {display_mode} ({unit}) on {plane_axis.replace('Y', 'X-Z').replace('X', 'Y-Z')} Plane at {plane_axis}={coordinate}m{title_scale}{title_scale_def}", 
+    fig.update_layout(title=f"2D Elevation: **{display_mode}** ({unit}) on {plane_axis.replace('Y', 'X-Z').replace('X', 'Y-Z')} Plane at {plane_axis}={coordinate}m{title_scale}{title_scale_def}", 
                       xaxis_title=f'{x_key.upper()}-axis (m)', yaxis_title='Z-axis (m)', showlegend=False)
     fig.update_yaxes(scaleanchor="x", scaleratio=1)
     return fig
 
 
 # --- 5. Main Streamlit App UI ---
-# (The Streamlit UI part remains largely the same, but inputs are set for the 2D sketch and plot_2d_frame call is updated)
-
 st.title("🏗️ 2D/3D Frame Analyzer")
 st.write("Define your building grid, sections, and loads to generate and analyze a 3D frame.")
 
 with st.sidebar:
     st.header("1. Frame Geometry (For 2D Sketch)")
     x_grid = st.text_input("X-spans (m)", "7.0") 
-    y_grid = st.text_input("Y-spans (m)", "0.001") # Set a minimal Y-span to force X-Z plane
+    y_grid = st.text_input("Y-spans (m)", "0.001") 
     z_grid = st.text_input("Z-heights (m)", "3.5, 3.5")
     
     st.header("2. Section & Material")
     E = st.number_input("E (GPa)", 200.0, help="200 GPa for Steel")*1e6 
     with st.expander("Column & Beam Sizes"):
-        col_b, col_h = st.number_input("Col b (mm)", 240)/1000, st.number_input("Col h (mm)", 240)/1000 # Use IPE240 dim
-        beam_b, beam_h = st.number_input("Beam b (mm)", 120)/1000, st.number_input("Beam h (mm)", 240)/1000 # Use IPE240 dim
+        col_b, col_h = st.number_input("Col b (mm)", 240)/1000, st.number_input("Col h (mm)", 240)/1000
+        beam_b, beam_h = st.number_input("Beam b (mm)", 120)/1000, st.number_input("Beam h (mm)", 240)/1000
         
     st.header("3. Gravity Loads")
     with st.expander("Slab & Live Loads (Set to 0 for 2D Sketch Load Case)"):
@@ -508,14 +485,13 @@ with st.sidebar:
         
     st.subheader("4. Specific Uniform Loads (UDL)")
     wall_load_input = st.text_area("Element Loads (e.g., 2, 3: 5 kN/m)", 
-                                   value="3, 4: 10.0", # Loads from sketch
+                                   value="3, 4: 10.0", 
                                    height=100,
                                    help="Enter Element IDs and the load magnitude (in kN/m applied in -Z direction).")
     
     analyze_button = st.button("Generate & Analyze Frame", type="primary")
 
 if analyze_button:
-    # (Analysis logic - Omitted for brevity)
     x_dims, y_dims, z_dims = parse_grid_input(x_grid), parse_grid_input(y_grid), parse_grid_input(z_grid)
     wall_load_data = parse_and_apply_wall_loads(wall_load_input)
     
@@ -543,8 +519,6 @@ if analyze_button:
 if 'analysis_results' in st.session_state and st.session_state['analysis_results']['success']:
     results, nodes, elements = st.session_state['analysis_results'], st.session_state['analysis_results']['nodes'], st.session_state['analysis_results']['elements']
     
-    # 3D Visualization Section (Omitted for brevity)
-    
     tab1, tab2, tab3 = st.tabs(["2D Elevation View", "Support Reactions", "Detailed Element Results"])
     
     with tab1:
@@ -553,11 +527,10 @@ if 'analysis_results' in st.session_state and st.session_state['analysis_results
         col_2d_1, col_2d_2, col_2d_3 = st.columns([0.3, 0.4, 0.3])
         
         plane_axis_display = col_2d_1.radio("Grid Plane", ('X-Z (Y-Gridline)', 'Y-Z (X-Gridline)'), key='plane_axis_radio_1')
-        diagram_options = ['Structure', 'Bending Moment', 'Shear Force', 'Axial Force', 'Deflection']
+        diagram_options = ['Bending Moment', 'Shear Force', 'Deflection', 'Axial Force', 'Structure']
         display_mode_2d = col_2d_2.selectbox("Result Diagram", diagram_options, key='display_mode_2d_1')
         show_values = col_2d_3.checkbox("Show Values", key='show_values_1', value=True)
         
-        # Force the selection to the plane of the 2D frame (y=0.001)
         if plane_axis_display == 'X-Z (Y-Gridline)':
             y_coords = sorted(list(set(n['y'] for n in nodes)))
             coordinate = y_coords[0] if y_coords else 0
@@ -567,14 +540,37 @@ if 'analysis_results' in st.session_state and st.session_state['analysis_results
             coordinate = x_coords[0] if x_coords else 0
             plane_key = 'X'
         
-        st.info(f"Showing results on the **{plane_key}-Gridline** at coordinate **{coordinate:.3f} m**.")
+        st.info(f"Displaying **{display_mode_2d}** on the **{plane_key}-Gridline** at coordinate **{coordinate:.3f} m**.")
         
         st.plotly_chart(plot_2d_frame(nodes, elements, plane_key, coordinate, display_mode_2d, show_values, st.session_state['wall_load_data']), use_container_width=True)
 
     with tab2:
-        # (Support Reactions - Omitted for brevity)
-        pass
+        st.subheader("Support Reactions (Global X, Y, Z)")
+        support_nodes = {n['id']: n for n in nodes if any(n['restraints'])}
+        if support_nodes:
+            node_id = st.selectbox("Select support node", options=sorted(list(support_nodes.keys())), key='support_node_select')
+            st.dataframe(pd.DataFrame({
+                "DOF": ["Fx", "Fy", "Fz", "Mx", "My", "Mz"], 
+                "Value (kN, kNm)": support_nodes[node_id]['reactions']
+            }).round(2), use_container_width=True)
+        else: st.write("No support nodes found.")
         
     with tab3:
-        # (Detailed Results - Omitted for brevity)
-        pass
+        st.subheader("All Element End Forces & Moments (Local Coordinates)")
+        data = []
+        for e in elements:
+            res = e['results']
+            data.append({
+                'ID': e['id'], 
+                'Start Node': e['start_node_id'], 
+                'End Node': e['end_node_id'], 
+                'Length (m)': e.get('length', 0.0), 
+                'Max |M| (kNm)': res.get('Max_Abs_Moment', 0),
+                'Axial Start (kN)': res.get('Axial_Start', 0), 
+                'Axial End (kN)': res.get('Axial_End', 0),
+                'Shear Z Start (kN)': res.get('Shear_Z_Start', 0),
+                'Shear Z End (kN)': res.get('Shear_Z_End', 0),
+                'Moment Z Start (kNm)': res.get('Moment_Z_Start', 0),
+                'Moment Z End (kNm)': res.get('Moment_Z_End', 0),
+            })
+        st.dataframe(pd.DataFrame(data).round(2), use_container_width=True)
