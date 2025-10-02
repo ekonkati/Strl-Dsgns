@@ -199,7 +199,7 @@ html_content = f"""
         /**
          * Creates a scaled member geometry mesh.
          */
-        function createScaledMember(memberData, is2DView = false, p1, p2) {
+        function createScaledMember(memberData, is2DView = false, p1, p2) {{
             const isColumn = memberData.type === 'Column';
 
             const length = p1.distanceTo(p2);
@@ -231,12 +231,12 @@ html_content = f"""
             }}
 
             return mesh;
-        }
+        }}
 
         /**
          * Creates a force diagram profile (Moment/Shear).
          */
-        function createForceDiagram(memberData, forceType, lineColor, is2DView = false, p1, p2) {
+        function createForceDiagram(memberData, forceType, lineColor, is2DView = false, p1, p2) {{
             const isColumn = memberData.type === 'Column';
             
             const points = [];
