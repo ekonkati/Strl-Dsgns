@@ -1,9 +1,59 @@
 import streamlit as st
 import streamlit.components.v1 as components
+import json
+
+# --- START OF PYTHON DATA DEFINITION ---
+# This section holds the structure data in Python dictionaries/lists.
+# You can now easily replace this data with the output of your analysis function.
+
+FRAME_Z_OFFSET = 0
+
+# Node Data (coordinates)
+nodes_data = {
+    'N1': { 'x': 0, 'y': 0, 'z': FRAME_Z_OFFSET },
+    'N2': { 'x': 6, 'y': 0, 'z': FRAME_Z_OFFSET },
+    'N3': { 'x': 0, 'y': 4, 'z': FRAME_Z_OFFSET },
+    'N4': { 'x': 6, 'y': 4, 'z': FRAME_Z_OFFSET },
+}
+
+# Member Data (sections, connectivity, and calculated internal forces)
+members_data = [
+    {
+        'id': 'C1', 'start': 'N1', 'end': 'N3',
+        'section': { 'name': 'COL-300x600', 'd': 0.25, 'w': 0.25 }, 
+        'type': 'Column',
+        'forces': {
+            'M': { 'max': 30, 'profile': 'linear' }, 
+            'V': { 'max': 25, 'profile': 'constant' }
+        }
+    },
+    {
+        'id': 'B1', 'start': 'N3', 'end': 'N4',
+        'section': { 'name': 'B-230x450', 'd': 0.30, 'w': 0.20 },
+        'type': 'Beam',
+        'forces': {
+            'M': { 'max': 100, 'profile': 'parabolic' }, 
+            'V': { 'max': 50, 'profile': 'linear' }
+        }
+    },
+    {
+        'id': 'C2', 'start': 'N2', 'end': 'N4',
+        'section': { 'name': 'COL-300x600', 'd': 0.25, 'w': 0.25 },
+        'type': 'Column',
+        'forces': {
+            'M': { 'max': 30, 'profile': 'linear' }, 
+            'V': { 'max': 25, 'profile': 'constant' }
+        }
+    }
+]
+
+# 1. Serialize Python data into JSON strings
+nodes_json = json.dumps(nodes_data)
+members_json = json.dumps(members_data)
 
 # --- START OF VISUALIZATION HTML/JS CONTENT ---
-# This block contains the complete Three.js application.
-html_content = """
+# We use an f-string to inject the JSON data into the HTML.
+html_content = f"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -14,7 +64,7 @@ html_content = """
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         /* Custom CSS for layout and aesthetics */
-        body {
+        body {{
             font-family: 'Inter', sans-serif;
             margin: 0;
             background-color: #f0f4f8;
@@ -23,8 +73,8 @@ html_content = """
             flex-direction: column;
             align-items: center;
             height: 100vh;
-        }
-        #info-panel {
+        }}
+        #info-panel {{
             position: absolute;
             top: 10px;
             right: 10px;
@@ -34,8 +84,8 @@ html_content = """
             box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
             max-width: 300px;
             z-index: 10;
-        }
-        #tooltip {
+        }}
+        #tooltip {{
             position: absolute;
             background-color: #1f2937;
             color: #fcd34d;
@@ -48,37 +98,37 @@ html_content = """
             font-size: 0.875rem;
             line-height: 1.4;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-        }
-        #tooltip.visible {
+        }}
+        #tooltip.visible {{
             opacity: 1;
-        }
-        #visualization-wrapper {
+        }}
+        #visualization-wrapper {{
             width: 100vw;
             height: 100vh;
             display: flex;
             flex-direction: column;
-        }
-        #canvas-3d {
+        }}
+        #canvas-3d {{
             height: 65%; /* Primary view */
             border-bottom: 2px solid #ccc;
             position: relative;
             width: 100%;
-        }
-        #canvas-bottom-row {
+        }}
+        #canvas-bottom-row {{
             height: 35%; /* Bottom panel */
             width: 100%;
             display: flex;
-        }
-        #canvas-2d, #canvas-focused-3d {
+        }}
+        #canvas-2d, #canvas-focused-3d {{
             width: 50%;
             position: relative;
-        }
-        #canvas-2d {
+        }}
+        #canvas-2d {{
             border-right: 1px solid #ddd;
-        }
-        canvas {
+        }}
+        canvas {{
             display: block;
-        }
+        }}
     </style>
 </head>
 <body>
@@ -117,45 +167,14 @@ html_content = """
         const FORCE_DIAGRAM_SCALE = 0.02; // Scaling factor for force magnitude visualization
         const FRAME_Z_OFFSET = 0; // Keeping it 2D (in the X-Y plane)
 
-        // --- Sample Data Structure (Hard-coded for demonstration) ---
+        // --- Dynamic Data Structure (Passed from Python) ---
+        // JSON.parse is used to convert the Python-generated JSON string back into a JavaScript object.
+        
         // Coordinates (X, Y, Z)
-        const nodes = {
-            'N1': { x: 0, y: 0, z: FRAME_Z_OFFSET },
-            'N2': { x: 6, y: 0, z: FRAME_Z_OFFSET },
-            'N3': { x: 0, y: 4, z: FRAME_Z_OFFSET },
-            'N4': { x: 6, y: 4, z: FRAME_Z_OFFSET },
-        };
+        const nodes = JSON.parse(`{nodes_json}`);
 
         // Members, Cross-sections (d=depth, w=width), and Force Data
-        const members = [
-            {
-                id: 'C1', start: 'N1', end: 'N3',
-                section: { name: 'COL-300x600', d: 0.25, w: 0.25 }, 
-                type: 'Column',
-                forces: {
-                    M: { max: 30, profile: 'linear' }, 
-                    V: { max: 25, profile: 'constant' }
-                }
-            },
-            {
-                id: 'B1', start: 'N3', end: 'N4',
-                section: { name: 'B-230x450', d: 0.30, w: 0.20 },
-                type: 'Beam',
-                forces: {
-                    M: { max: 100, profile: 'parabolic' }, 
-                    V: { max: 50, profile: 'linear' }
-                }
-            },
-            {
-                id: 'C2', start: 'N2', end: 'N4',
-                section: { name: 'COL-300x600', d: 0.25, w: 0.25 },
-                type: 'Column',
-                forces: {
-                    M: { max: 30, profile: 'linear' }, 
-                    V: { max: 25, profile: 'constant' }
-                }
-            }
-        ];
+        const members = JSON.parse(`{members_json}`);
 
         // --- Three.js Variables ---
         const container3D = document.getElementById('canvas-3d');
@@ -196,20 +215,20 @@ html_content = """
             );
 
             // Material: Grey for structure
-            const material = new THREE.MeshLambertMaterial({ 
+            const material = new THREE.MeshLambertMaterial({{ 
                 color: is2DView ? 0x4b5563 : 0x5a67d8, // Darker gray for 2D, Blue-ish for 3D
                 transparent: true, 
                 opacity: 0.9 
-            });
+            }});
             const mesh = new THREE.Mesh(geometry, material);
 
             // Position and Rotate the member
             mesh.position.addVectors(p1, p2).divideScalar(2);
             
-            if (!is2DView) {
+            if (!is2DView) {{
                  mesh.userData.originalColor = material.color.getHex();
                  mesh.userData.member = memberData; // Attach member data
-            }
+            }}
 
             return mesh;
         }
@@ -227,25 +246,25 @@ html_content = """
 
             // Determine the offset vector (perpendicular to the member)
             let offset;
-            if (isColumn) {
+            if (isColumn) {{
                 // Offset in the +X direction (for diagram visibility)
                 offset = new THREE.Vector3(memberData.section.w * SCALED_SECTION_FACTOR * 1.5, 0, 0);
-            } else {
+            }} else {{
                 // Offset in the -Y direction (downwards for beam)
                 offset = new THREE.Vector3(0, -memberData.section.d * SCALED_SECTION_FACTOR * 1.5, 0);
-            }
+            }}
 
             // Function to get the force magnitude at position 't' (0 to 1)
-            const getForceMagnitude = (t) => {
-                switch (profile) {
+            const getForceMagnitude = (t) => {{
+                switch (profile) {{
                     case 'constant': return maxForce;
                     case 'linear': return maxForce * (1 - t); 
                     case 'parabolic': return maxForce * 4 * t * (1 - t); 
                     default: return 0;
-                }
-            };
+                }}
+            }};
 
-            for (let i = 0; i <= segments; i++) {
+            for (let i = 0; i <= segments; i++) {{
                 const t = i / segments;
 
                 // Position along the member (Linear interpolation)
@@ -260,23 +279,23 @@ html_content = """
                 // The final point in 3D space
                 const finalPoint = pointOnMember.add(forceVector);
                 points.push(finalPoint);
-            }
+            }}
 
             const geometry = new THREE.BufferGeometry().setFromPoints(points);
-            const material = new THREE.LineBasicMaterial({ 
+            const material = new THREE.LineBasicMaterial({{ 
                 color: lineColor, 
                 linewidth: is2DView ? 5 : 2 // Thicker lines for 2D clarity
-            });
+            }});
             const line = new THREE.Line(geometry, material);
             
             line.position.z = 0.01; // Z-fighting prevention
             
             return line;
-        }
+        }}
         
         // --- Frame Assembly Function ---
-        function createFrameGeometry(sceneGroup, is2DView) {
-            members.forEach(memberData => {
+        function createFrameGeometry(sceneGroup, is2DView) {{
+            members.forEach(memberData => {{
                 const startNode = nodes[memberData.start];
                 const endNode = nodes[memberData.end];
                 
@@ -294,12 +313,12 @@ html_content = """
                 // 3. Shear Diagram (Red)
                 const shearLine = createForceDiagram(memberData, 'V', 0xf87171, is2DView, p1, p2);
                 sceneGroup.add(shearLine);
-            });
-        }
+            }});
+        }}
 
 
         // --- Three.js Initialization Functions ---
-        function init3D() {
+        function init3D() {{
             scene3D = new THREE.Scene();
             scene3D.background = new THREE.Color(0xe5e7eb); 
             
@@ -307,7 +326,7 @@ html_content = """
             camera3D.position.set(3, 3, 10);
             camera3D.lookAt(3, 2, 0);
             
-            renderer3D = new THREE.WebGLRenderer({ antialias: true });
+            renderer3D = new THREE.WebGLRenderer({{ antialias: true }});
             renderer3D.setSize(container3D.clientWidth, container3D.clientHeight);
             container3D.appendChild(renderer3D.domElement);
 
@@ -325,9 +344,9 @@ html_content = """
             raycaster = new THREE.Raycaster();
             mouse = new THREE.Vector2();
             renderer3D.domElement.addEventListener('mousemove', onMouseMove, false);
-        }
+        }}
 
-        function init2D() {
+        function init2D() {{
             scene2D = new THREE.Scene();
             scene2D.background = new THREE.Color(0xf0f4f8); 
 
@@ -336,11 +355,11 @@ html_content = """
             const sizeY = worldHeight * 1.3; 
             
             let viewSize;
-            if (aspect > sizeX / sizeY) {
+            if (aspect > sizeX / sizeY) {{
                 viewSize = sizeY; 
-            } else {
+            }} else {{
                 viewSize = sizeX / aspect; 
-            }
+            }}
 
             const halfSize = viewSize / 2;
             camera2D = new THREE.OrthographicCamera(
@@ -352,7 +371,7 @@ html_content = """
             camera2D.position.set(worldWidth / 2, worldHeight / 2, 5);
             camera2D.lookAt(worldWidth / 2, worldHeight / 2, 0);
 
-            renderer2D = new THREE.WebGLRenderer({ antialias: true });
+            renderer2D = new THREE.WebGLRenderer({{ antialias: true }});
             renderer2D.setSize(container2D.clientWidth, container2D.clientHeight);
             container2D.appendChild(renderer2D.domElement);
 
@@ -362,9 +381,9 @@ html_content = """
             scene2D.add(membersGroup2D);
 
             createFrameGeometry(membersGroup2D, true); 
-        }
+        }}
 
-        function initFocused3D() {
+        function initFocused3D() {{
             sceneFocused = new THREE.Scene();
             sceneFocused.background = new THREE.Color(0xf5f5f5); // Slightly lighter background
             
@@ -373,7 +392,7 @@ html_content = """
             cameraFocused.position.set(0, 0, 5); 
             cameraFocused.lookAt(0, 0, 0);
             
-            rendererFocused = new THREE.WebGLRenderer({ antialias: true });
+            rendererFocused = new THREE.WebGLRenderer({{ antialias: true }});
             rendererFocused.setSize(containerFocused.clientWidth, containerFocused.clientHeight);
             containerFocused.appendChild(rendererFocused.domElement);
 
@@ -383,16 +402,16 @@ html_content = """
 
             membersGroupFocused = new THREE.Group();
             sceneFocused.add(membersGroupFocused);
-        }
+        }}
 
         /**
          * Updates the focused 3D window with a single, centered member.
          */
-        function updateFocusedView(memberData) {
+        function updateFocusedView(memberData) {{
             // Clear previous member
-            while(membersGroupFocused.children.length > 0){
+            while(membersGroupFocused.children.length > 0){{
                 membersGroupFocused.remove(membersGroupFocused.children[0]);
-            }
+            }}
             focusedPrompt.style.display = 'none';
 
             const isColumn = memberData.type === 'Column';
@@ -404,19 +423,19 @@ html_content = """
             let p1_local, p2_local;
             let offset_x, offset_y;
 
-            if (isColumn) {
+            if (isColumn) {{
                 // Column runs vertically (Y-axis)
                 p1_local = new THREE.Vector3(0, 0, 0); // Base
                 p2_local = new THREE.Vector3(0, focusedLength, 0); // Top
                 offset_x = memberData.section.w * focusedSectionScale * 1.5;
                 offset_y = 0;
-            } else {
+            }} else {{
                 // Beam runs horizontally (X-axis)
                 p1_local = new THREE.Vector3(0, focusedLength, 0); // Left
                 p2_local = new THREE.Vector3(focusedLength, focusedLength, 0); // Right
                 offset_x = 0;
                 offset_y = -memberData.section.d * focusedSectionScale * 1.5;
-            }
+            }}
             
             // Adjust geometry dimensions for the focused view
             const dim1 = memberData.section.d * focusedSectionScale;
@@ -428,36 +447,36 @@ html_content = """
                 isColumn ? dim1 : dim2            // Column depth or Beam width
             );
             
-            const mesh = new THREE.Mesh(geometry, new THREE.MeshLambertMaterial({ color: 0x5a67d8, transparent: false }));
+            const mesh = new THREE.Mesh(geometry, new THREE.MeshLambertMaterial({{ color: 0x5a67d8, transparent: false }}));
             mesh.position.addVectors(p1_local, p2_local).divideScalar(2);
             membersGroupFocused.add(mesh);
 
             // 2. Re-create Force Diagrams (using local coordinates)
             
             // Modify force diagram creation locally for this view
-            const createFocusedForceDiagram = (type, color) => {
+            const createFocusedForceDiagram = (type, color) => {{
                 const points = [];
                 const segments = 20;
                 const maxForce = memberData.forces[type].max;
                 const profile = memberData.forces[type].profile;
 
                 let offset;
-                if (isColumn) {
+                if (isColumn) {{
                     offset = new THREE.Vector3(offset_x, 0, 0);
-                } else {
+                }} else {{
                     offset = new THREE.Vector3(0, offset_y, 0);
-                }
+                }}
 
-                const getForceMagnitude = (t) => {
-                    switch (profile) {
+                const getForceMagnitude = (t) => {{
+                    switch (profile) {{
                         case 'constant': return maxForce;
                         case 'linear': return maxForce * (1 - t); 
                         case 'parabolic': return maxForce * 4 * t * (1 - t); 
                         default: return 0;
-                    }
-                };
+                    }}
+                }};
 
-                for (let i = 0; i <= segments; i++) {
+                for (let i = 0; i <= segments; i++) {{
                     const t = i / segments;
 
                     const pointOnMember = new THREE.Vector3().lerpVectors(p1_local, p2_local, t);
@@ -466,13 +485,13 @@ html_content = """
                     const forceVector = offset.clone().normalize().multiplyScalar(magnitude);
                     const finalPoint = pointOnMember.add(forceVector);
                     points.push(finalPoint);
-                }
+                }}
 
                 const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), 
-                                            new THREE.LineBasicMaterial({ color: color, linewidth: 3 }));
+                                            new THREE.LineBasicMaterial({{ color: color, linewidth: 3 }}));
                 line.position.z = 0.01;
                 return line;
-            };
+            }};
 
             membersGroupFocused.add(createFocusedForceDiagram('M', 0x3b82f6));
             membersGroupFocused.add(createFocusedForceDiagram('V', 0xf87171));
@@ -481,19 +500,19 @@ html_content = """
             const centerPoint = mesh.position;
             cameraFocused.position.set(centerPoint.x + 3, centerPoint.y + 1, 5); 
             cameraFocused.lookAt(centerPoint);
-        }
+        }}
 
-        function clearFocusedView() {
-             while(membersGroupFocused.children.length > 0){
+        function clearFocusedView() {{
+             while(membersGroupFocused.children.length > 0){{
                 membersGroupFocused.remove(membersGroupFocused.children[0]);
-            }
+            }}
             focusedPrompt.style.display = 'flex';
-        }
+        }}
 
 
         // --- Interaction and Tooltip (Only on 3D View) ---
 
-        function onMouseMove(event) {
+        function onMouseMove(event) {{
             const rect = renderer3D.domElement.getBoundingClientRect();
             mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
             mouse.y = - ((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -502,15 +521,15 @@ html_content = """
 
             const intersects = raycaster.intersectObjects(membersGroup3D.children.filter(obj => obj.type === 'Mesh'));
 
-            if (intersects.length > 0) {
+            if (intersects.length > 0) {{
                 const intersect = intersects[0];
                 const newHighlightedMember = intersect.object;
 
-                if (highlightedMember !== newHighlightedMember) {
+                if (highlightedMember !== newHighlightedMember) {{
                     // Restore previous color
-                    if (highlightedMember) {
+                    if (highlightedMember) {{
                         highlightedMember.material.color.setHex(highlightedMember.userData.originalColor);
-                    }
+                    }}
 
                     // Highlight new member
                     highlightedMember = newHighlightedMember;
@@ -521,46 +540,46 @@ html_content = """
 
                     // --- NEW: Update Focused View ---
                     updateFocusedView(highlightedMember.userData.member);
-                }
-            } else {
+                }}
+            }} else {{
                 // Mouse is not over any member
-                if (highlightedMember) {
+                if (highlightedMember) {{
                     // Restore color
                     highlightedMember.material.color.setHex(highlightedMember.userData.originalColor);
                     highlightedMember = null;
 
                     // --- NEW: Clear Focused View ---
                     clearFocusedView();
-                }
+                }}
                 hideTooltip();
-            }
-        }
+            }}
+        }}
 
-        function showTooltip(point, data) {
+        function showTooltip(point, data) {{
             // Project 3D point to 2D screen coordinates
             const vector = point.clone().project(camera3D);
             const clientX = (vector.x * 0.5 + 0.5) * container3D.clientWidth;
             const clientY = (vector.y * -0.5 + 0.5) * container3D.clientHeight;
 
-            tooltip.style.left = `${clientX + 10}px`;
-            tooltip.style.top = `${clientY + 10}px`;
+            tooltip.style.left = `${{clientX + 10}}px`;
+            tooltip.style.top = `${{clientY + 10}}px`;
 
             tooltip.innerHTML = `
-                <p class="font-bold text-lg">${data.id} (${data.type})</p>
-                <p>Section: ${data.section.name}</p>
+                <p class="font-bold text-lg">${{data.id}} (${{data.type}})</p>
+                <p>Section: ${{data.section.name}}</p>
                 <hr class="my-1 border-yellow-600"/>
-                <p>Max Moment: <span class="text-blue-400 font-mono">${data.forces.M.max.toFixed(1)} kNm</span></p>
-                <p>Max Shear: <span class="text-red-400 font-mono">${data.forces.V.max.toFixed(1)} kN</span></p>
+                <p>Max Moment: <span class="text-blue-400 font-mono">${{data.forces.M.max.toFixed(1)}} kNm</span></p>
+                <p>Max Shear: <span class="text-red-400 font-mono">${{data.forces.V.max.toFixed(1)}} kN</span></p>
             `;
             tooltip.classList.add('visible');
-        }
+        }}
 
-        function hideTooltip() {
+        function hideTooltip() {{
             tooltip.classList.remove('visible');
-        }
+        }}
 
         // --- Resize Handler ---
-        function onWindowResize() {
+        function onWindowResize() {{
             // 3D View Resize
             camera3D.aspect = container3D.clientWidth / container3D.clientHeight;
             camera3D.updateProjectionMatrix();
@@ -572,11 +591,11 @@ html_content = """
             const sizeY = worldHeight * 1.3;
             let viewSize2D;
 
-            if (aspect2D > sizeX / sizeY) {
+            if (aspect2D > sizeX / sizeY) {{
                 viewSize2D = sizeY; 
-            } else {
+            }} else {{
                 viewSize2D = sizeX / aspect2D; 
-            }
+            }}
 
             const halfSize2D = viewSize2D / 2;
             camera2D.left = -halfSize2D * aspect2D;
@@ -591,26 +610,26 @@ html_content = """
             cameraFocused.aspect = containerFocused.clientWidth / containerFocused.clientHeight;
             cameraFocused.updateProjectionMatrix();
             rendererFocused.setSize(containerFocused.clientWidth, containerFocused.clientHeight);
-        }
+        }}
 
         // --- Animation Loop ---
-        function animate() {
+        function animate() {{
             requestAnimationFrame(animate);
 
             // Render all three scenes
             if (renderer3D) renderer3D.render(scene3D, camera3D);
             if (renderer2D) renderer2D.render(scene2D, camera2D);
             if (rendererFocused) rendererFocused.render(sceneFocused, cameraFocused);
-        }
+        }}
 
         // Start the application
-        window.onload = function () {
+        window.onload = function () {{
             init3D();
             init2D();
             initFocused3D(); // Initialize the new focused scene
             animate();
             window.addEventListener('resize', onWindowResize, false);
-        }
+        }}
     </script>
 </body>
 </html>
