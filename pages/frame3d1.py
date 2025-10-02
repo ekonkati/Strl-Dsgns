@@ -163,8 +163,8 @@ html_content = f"""
 
     <script>
         // --- Global Constants and Setup ---
-        const SCALED_SECTION_FACTOR = 0.05; // Visual scaling factor for cross-section
-        const FORCE_DIAGRAM_SCALE = 0.02; // Scaling factor for force magnitude visualization
+        const SCALED_SECTION_FACTOR = 0.1; // Increased factor for thicker members (was 0.05)
+        const FORCE_DIAGRAM_SCALE = 0.04; // Increased factor for larger force diagrams (was 0.02)
         const FRAME_Z_OFFSET = 0; // Keeping it 2D (in the X-Y plane)
 
         // --- Dynamic Data Structure (Passed from Python) ---
@@ -293,8 +293,29 @@ html_content = f"""
             return line;
         }}
         
+        /**
+         * Creates node geometry (small spheres).
+         */
+        function createNodeGeometry(sceneGroup, is2DView) {{
+            if (is2DView) return; // Only show nodes in the main 3D view for clarity
+
+            for (const nodeId in nodes) {{
+                const nodeData = nodes[nodeId];
+                const position = new THREE.Vector3(nodeData.x, nodeData.y, nodeData.z);
+                
+                // Sphere radius proportional to the member thickness
+                const geometry = new THREE.SphereGeometry(SCALED_SECTION_FACTOR * 1.5, 16, 16); 
+                const material = new THREE.MeshPhongMaterial({{ color: 0x000000, shininess: 100 }}); // Black, glossy sphere
+                const nodeMesh = new THREE.Mesh(geometry, material);
+                nodeMesh.position.copy(position);
+                
+                sceneGroup.add(nodeMesh);
+            }}
+        }}
+
         // --- Frame Assembly Function ---
         function createFrameGeometry(sceneGroup, is2DView) {{
+            // 1. Draw Members and Force Diagrams
             members.forEach(memberData => {{
                 const startNode = nodes[memberData.start];
                 const endNode = nodes[memberData.end];
@@ -302,18 +323,21 @@ html_content = f"""
                 const p1 = new THREE.Vector3(startNode.x, startNode.y, startNode.z);
                 const p2 = new THREE.Vector3(endNode.x, endNode.y, endNode.z);
 
-                // 1. Scaled Member Geometry
+                // Scaled Member Geometry
                 const mesh = createScaledMember(memberData, is2DView, p1, p2);
                 sceneGroup.add(mesh);
 
-                // 2. Moment Diagram (Blue)
+                // Moment Diagram (Blue)
                 const momentLine = createForceDiagram(memberData, 'M', 0x3b82f6, is2DView, p1, p2);
                 sceneGroup.add(momentLine);
 
-                // 3. Shear Diagram (Red)
+                // Shear Diagram (Red)
                 const shearLine = createForceDiagram(memberData, 'V', 0xf87171, is2DView, p1, p2);
                 sceneGroup.add(shearLine);
             }});
+
+            // 2. Draw Nodes (only in the main 3D view)
+            createNodeGeometry(sceneGroup, is2DView);
         }}
 
 
@@ -417,7 +441,7 @@ html_content = f"""
             const isColumn = memberData.type === 'Column';
             const focusedLength = 5; // Standard length for focused view, regardless of original scale
             const focusedScaleFactor = focusedLength / 4; // Scale forces/sections relative to a 4 unit length
-            const focusedSectionScale = SCALED_SECTION_FACTOR * 1.5; // Slightly larger for focus
+            const focusedSectionScale = SCALED_SECTION_FACTOR * 2.0; // Increased section scale for focus
 
             // 1. Define Local Coordinates for Centering (e.g., origin to top/center)
             let p1_local, p2_local;
@@ -480,7 +504,7 @@ html_content = f"""
                     const t = i / segments;
 
                     const pointOnMember = new THREE.Vector3().lerpVectors(p1_local, p2_local, t);
-                    const magnitude = getForceMagnitude(t) * FORCE_DIAGRAM_SCALE * focusedScaleFactor; // Scale force diagrams up slightly
+                    const magnitude = getForceMagnitude(t) * FORCE_DIAGRAM_SCALE * focusedScaleFactor; // Use updated scale
 
                     const forceVector = offset.clone().normalize().multiplyScalar(magnitude);
                     const finalPoint = pointOnMember.add(forceVector);
@@ -495,10 +519,28 @@ html_content = f"""
 
             membersGroupFocused.add(createFocusedForceDiagram('M', 0x3b82f6));
             membersGroupFocused.add(createFocusedForceDiagram('V', 0xf87171));
+            
+            // 3. Add small nodes at the start/end of the focused member
+            const nodeGeo = new THREE.SphereGeometry(SCALED_SECTION_FACTOR * 2.5, 16, 16); 
+            const nodeMat = new THREE.MeshPhongMaterial({{ color: 0x000000 }}); 
 
-            // 3. Center the camera on the member
+            const node1 = new THREE.Mesh(nodeGeo, nodeMat);
+            node1.position.copy(p1_local);
+            membersGroupFocused.add(node1);
+
+            const node2 = new THREE.Mesh(nodeGeo, nodeMat);
+            node2.position.copy(p2_local);
+            membersGroupFocused.add(node2);
+
+
+            // 4. Center the camera on the member
             const centerPoint = mesh.position;
-            cameraFocused.position.set(centerPoint.x + 3, centerPoint.y + 1, 5); 
+            // Adjust camera position slightly based on the member type for a better view
+            if (isColumn) {{
+                cameraFocused.position.set(centerPoint.x + 3.5, centerPoint.y + 0, 5); 
+            }} else {{
+                cameraFocused.position.set(centerPoint.x, centerPoint.y - 1, 5); 
+            }}
             cameraFocused.lookAt(centerPoint);
         }}
 
@@ -557,9 +599,10 @@ html_content = f"""
 
         function showTooltip(point, data) {{
             // Project 3D point to 2D screen coordinates
+            const rect = container3D.getBoundingClientRect();
             const vector = point.clone().project(camera3D);
-            const clientX = (vector.x * 0.5 + 0.5) * container3D.clientWidth;
-            const clientY = (vector.y * -0.5 + 0.5) * container3D.clientHeight;
+            const clientX = (vector.x * 0.5 + 0.5) * rect.width + rect.left;
+            const clientY = (vector.y * -0.5 + 0.5) * rect.height + rect.top;
 
             tooltip.style.left = `${{clientX + 10}}px`;
             tooltip.style.top = `${{clientY + 10}}px`;
