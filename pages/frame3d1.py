@@ -330,7 +330,9 @@ def apply_dead_load(nodes, elements, params):
     """Calculates self-weight (dead load) and applies it to nodes."""
     # Reset nodal loads
     for n in nodes:
-        n.load.fill(0.0)
+        # Note: We only reset the Nodal Loads here. If this function is part of a combination
+        # the calling function is responsible for ensuring the loads start at 0.
+        pass 
 
     # Distributed self-weight (q) = density * area (kN/m)
     q = params['rho'] * params['Section Size']**2 # This now correctly accesses 'rho'
@@ -356,11 +358,11 @@ def apply_dead_load(nodes, elements, params):
 def apply_live_load(nodes, elements, params):
     """Applies simplified live load to the roof nodes."""
     # Only applies vertical Live Load (Pz) to roof nodes (z=H)
-    roof_load_per_node = -params['Live Load (kN/m2)'] * params['Bay Length']**2 / 4.0
     
-    # Reset existing Live Load contribution
-    for n in nodes:
-        n.load.fill(0.0)
+    # NOTE: The load application functions only modify the 'load' attribute of the
+    # Node objects passed to them. Load combinations handle the summation.
+    
+    roof_load_per_node = -params['Live Load (kN/m2)'] * params['Bay Length']**2 / 4.0
         
     for n in nodes:
         if n.z == params['Storey Height']:
@@ -378,10 +380,6 @@ def apply_wind_load(nodes, elements, params, direction='X'):
     trib_area = params['Bay Length'] * params['Storey Height'] / 2.0
     P_node = P_wind * trib_area # Nodal force magnitude
     
-    # Reset existing Wind Load contribution
-    for n in nodes:
-        n.load.fill(0.0)
-
     for n in nodes:
         if n.z == params['Storey Height']:
             if direction == 'X':
@@ -549,16 +547,36 @@ def plot_3d_frame_with_reactions(nodes: List[Node], elements: List[Element], sca
 
     return fig
 
-# --- 6. Streamlit App Layout and Data Management ---
+# --- 6. Main Analysis & Data Flow ---
 
 def run_analysis(nodes: List[Node], elements: List[Element], case: str, params: dict):
     """Calculates loads, runs the FEA solver, and stores results."""
     
-    # 1. Reset loads on all nodes
+    # 1. Reset loads on all nodes before applying the new case load
     for n in nodes:
         n.load.fill(0.0)
 
-    # 2. Apply load for the selected case
+    # Helper function to apply and retrieve loads for a specific case (used for combinations)
+    def get_case_loads(case_type, current_params):
+        # Create temporary nodes/elements to calculate load contributions independently
+        temp_nodes, temp_elements = generate_default_structure(current_params)
+        
+        # Apply appropriate loading function to temporary nodes
+        if case_type == 'DL':
+            apply_dead_load(temp_nodes, temp_elements, current_params)
+        elif case_type == 'LL':
+            apply_live_load(temp_nodes, temp_elements, current_params)
+        elif case_type == 'WLX':
+            apply_wind_load(temp_nodes, temp_elements, current_params, 'X')
+        elif case_type == 'WLY':
+            apply_wind_load(temp_nodes, temp_elements, current_params, 'Y')
+        
+        # Return loads indexed by node ID
+        return {n.id: n.load for n in temp_nodes}
+
+
+    # 2. Apply load for the selected case or combination
+    
     if case == 'DL (Dead Load)':
         apply_dead_load(nodes, elements, params)
     elif case == 'LL (Live Load)':
@@ -567,37 +585,23 @@ def run_analysis(nodes: List[Node], elements: List[Element], case: str, params: 
         apply_wind_load(nodes, elements, params, 'X')
     elif case == 'WLY (Wind Load +Y)':
         apply_wind_load(nodes, elements, params, 'Y')
-    else:
-        # --- Handle Load Combinations ---
+    
+    # --- Handle Load Combinations ---
+    elif case == '1.5(DL+LL)':
+        dl_loads = get_case_loads('DL', params)
+        ll_loads = get_case_loads('LL', params)
         
-        # Helper function to generate and retrieve loads for a specific case
-        def get_case_loads(case_type, current_params):
-            temp_nodes, _ = generate_default_structure(current_params)
-            
-            # Apply appropriate loading function
-            if case_type == 'DL':
-                apply_dead_load(temp_nodes, [], current_params) # Elements aren't strictly needed here for nodal load summation
-            elif case_type == 'LL':
-                apply_live_load(temp_nodes, [], current_params)
-            elif case_type == 'WLX':
-                apply_wind_load(temp_nodes, [], current_params, 'X')
-            
-            return {n.id: n.load for n in temp_nodes}
-            
-        if case == '1.5(DL+LL)':
-            dl_loads = get_case_loads('DL', params)
-            ll_loads = get_case_loads('LL', params)
-            
-            for n in nodes:
-                n.load = 1.5 * (dl_loads[n.id] + ll_loads[n.id])
-            
-        elif case == '1.5(DL+WLX)':
-            dl_loads = get_case_loads('DL', params)
-            wlx_loads = get_case_loads('WLX', params)
-            
-            for n in nodes:
-                n.load = 1.5 * (dl_loads[n.id] + wlx_loads[n.id])
-        # Add more load combinations as needed...
+        for n in nodes:
+            n.load = 1.5 * (dl_loads[n.id] + ll_loads[n.id])
+        
+    elif case == '1.5(DL+WLX)':
+        dl_loads = get_case_loads('DL', params)
+        wlx_loads = get_case_loads('WLX', params)
+        
+        for n in nodes:
+            n.load = 1.5 * (dl_loads[n.id] + wlx_loads[n.id])
+    # Add more load combinations here...
+
 
     # 3. Run Solver
     try:
@@ -642,7 +646,7 @@ with st.sidebar:
     SECTION_SIZE = st.number_input("Square Section Size (b=d) (m)", min_value=0.1, value=0.4, step=0.05, format="%.2f", key='b')
     FCK = st.number_input("Concrete Grade (fck) (MPa)", min_value=15, value=20, step=5, key='fck')
     
-    # FIX: Added Density Input for self-weight calculation
+    # Critical input for self-weight calculation
     DENSITY_RC = st.number_input("RC Density (rho) (kN/m³)", min_value=10.0, value=25.0, step=1.0, key='rho_input', help="Used for calculating element self-weight (Dead Load).")
     
     st.header("2. Load Inputs (Simplified IS Code)")
@@ -660,13 +664,13 @@ with st.sidebar:
     selected_case = st.selectbox("Select Load Case to Analyze", options=LOAD_CASES, key='case_select')
     
     if st.button("Run Full Analysis", use_container_width=True):
-        # 1. Collect all parameters
+        # 1. Collect all parameters into a single dictionary
         analysis_params = {
             'Bay Length': BAY_LENGTH,
             'Storey Height': STOREY_HEIGHT,
             'Section Size': SECTION_SIZE,
             'fck': FCK,
-            'rho': DENSITY_RC, # FIX: Added rho to params
+            'rho': DENSITY_RC, # <-- Consistent key for density
             'Slab DL (kN/m2)': SLAB_DL,
             'Live Load (kN/m2)': LIVE_LOAD,
             'Wind Speed (m/s)': WIND_SPEED,
