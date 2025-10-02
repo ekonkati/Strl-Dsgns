@@ -16,11 +16,18 @@ nodes_data = {
     'N4': { 'x': 6, 'y': 4, 'z': FRAME_Z_OFFSET },
 }
 
+# New: Section Properties (Cross-section dimensions for reuse: d=depth, w=width in meters)
+section_properties = {
+    'COL_RECT': { 'name': 'R-600x300', 'd': 0.60, 'w': 0.30 }, # Depth (Y) 0.6m, Width (Z) 0.3m
+    'B_RECT': { 'name': 'R-450x230', 'd': 0.45, 'w': 0.23 }   # Depth (Y) 0.45m, Width (Z) 0.23m
+}
+
 # Member Data (sections, connectivity, and calculated internal forces)
+# Now uses 'section_id' to reference the section_properties dictionary.
 members_data = [
     {
         'id': 'C1', 'start': 'N1', 'end': 'N3',
-        'section': { 'name': 'COL-300x600', 'd': 0.25, 'w': 0.25 }, 
+        'section_id': 'COL_RECT', 
         'type': 'Column',
         'forces': {
             'M': { 'max': 30, 'profile': 'linear' }, 
@@ -29,7 +36,7 @@ members_data = [
     },
     {
         'id': 'B1', 'start': 'N3', 'end': 'N4',
-        'section': { 'name': 'B-230x450', 'd': 0.30, 'w': 0.20 },
+        'section_id': 'B_RECT',
         'type': 'Beam',
         'forces': {
             'M': { 'max': 100, 'profile': 'parabolic' }, 
@@ -38,7 +45,7 @@ members_data = [
     },
     {
         'id': 'C2', 'start': 'N2', 'end': 'N4',
-        'section': { 'name': 'COL-300x600', 'd': 0.25, 'w': 0.25 },
+        'section_id': 'COL_RECT',
         'type': 'Column',
         'forces': {
             'M': { 'max': 30, 'profile': 'linear' }, 
@@ -50,6 +57,7 @@ members_data = [
 # 1. Serialize Python data into JSON strings
 nodes_json = json.dumps(nodes_data)
 members_json = json.dumps(members_data)
+sections_json = json.dumps(section_properties) # Serialize new section data
 
 # --- START OF VISUALIZATION HTML/JS CONTENT ---
 # We use an f-string to inject the JSON data into the HTML.
@@ -173,8 +181,12 @@ html_content = f"""
         // Coordinates (X, Y, Z)
         const nodes = JSON.parse(`{nodes_json}`);
 
-        // Members, Cross-sections (d=depth, w=width), and Force Data
+        // Members (references sections by ID)
         const members = JSON.parse(`{members_json}`);
+        
+        // NEW: Section Properties Map
+        const sections = JSON.parse(`{sections_json}`);
+
 
         // --- Three.js Variables ---
         const container3D = document.getElementById('canvas-3d');
@@ -201,12 +213,13 @@ html_content = f"""
          */
         function createScaledMember(memberData, is2DView = false, p1, p2) {{
             const isColumn = memberData.type === 'Column';
+            const section = sections[memberData.section_id]; // <-- Lookup section properties
 
             const length = p1.distanceTo(p2);
 
             // Create Box Geometry based on cross-section (scaled)
-            const dim1 = memberData.section.d * SCALED_SECTION_FACTOR;
-            const dim2 = memberData.section.w * SCALED_SECTION_FACTOR;
+            const dim1 = section.d * SCALED_SECTION_FACTOR;
+            const dim2 = section.w * SCALED_SECTION_FACTOR;
 
             const geometry = new THREE.BoxGeometry(
                 isColumn ? dim2 : length,
@@ -238,6 +251,7 @@ html_content = f"""
          */
         function createForceDiagram(memberData, forceType, lineColor, is2DView = false, p1, p2) {{
             const isColumn = memberData.type === 'Column';
+            const section = sections[memberData.section_id]; // <-- Lookup section properties
             
             const points = [];
             const segments = 20;
@@ -248,10 +262,10 @@ html_content = f"""
             let offset;
             if (isColumn) {{
                 // Offset in the +X direction (for diagram visibility)
-                offset = new THREE.Vector3(memberData.section.w * SCALED_SECTION_FACTOR * 1.5, 0, 0);
+                offset = new THREE.Vector3(section.w * SCALED_SECTION_FACTOR * 1.5, 0, 0); // Use section.w
             }} else {{
                 // Offset in the -Y direction (downwards for beam)
-                offset = new THREE.Vector3(0, -memberData.section.d * SCALED_SECTION_FACTOR * 1.5, 0);
+                offset = new THREE.Vector3(0, -section.d * SCALED_SECTION_FACTOR * 1.5, 0); // Use section.d
             }}
 
             // Function to get the force magnitude at position 't' (0 to 1)
@@ -439,6 +453,7 @@ html_content = f"""
             focusedPrompt.style.display = 'none';
 
             const isColumn = memberData.type === 'Column';
+            const section = sections[memberData.section_id]; // <-- Lookup section properties
             const focusedLength = 5; // Standard length for focused view, regardless of original scale
             const focusedScaleFactor = focusedLength / 4; // Scale forces/sections relative to a 4 unit length
             const focusedSectionScale = SCALED_SECTION_FACTOR * 2.0; // Increased section scale for focus
@@ -451,19 +466,19 @@ html_content = f"""
                 // Column runs vertically (Y-axis)
                 p1_local = new THREE.Vector3(0, 0, 0); // Base
                 p2_local = new THREE.Vector3(0, focusedLength, 0); // Top
-                offset_x = memberData.section.w * focusedSectionScale * 1.5;
+                offset_x = section.w * focusedSectionScale * 1.5;
                 offset_y = 0;
             }} else {{
                 // Beam runs horizontally (X-axis)
-                p1_local = new THREE.Vector3(0, focusedLength, 0); // Left
-                p2_local = new THREE.Vector3(focusedLength, focusedLength, 0); // Right
+                p1_local = new THREE.Vector3(0, section.d, 0); // Left (Adjust starting Y to show beam depth better)
+                p2_local = new THREE.Vector3(focusedLength, section.d, 0); // Right
                 offset_x = 0;
-                offset_y = -memberData.section.d * focusedSectionScale * 1.5;
+                offset_y = -section.d * focusedSectionScale * 1.5;
             }}
             
             // Adjust geometry dimensions for the focused view
-            const dim1 = memberData.section.d * focusedSectionScale;
-            const dim2 = memberData.section.w * focusedSectionScale;
+            const dim1 = section.d * focusedSectionScale;
+            const dim2 = section.w * focusedSectionScale;
 
             const geometry = new THREE.BoxGeometry(
                 isColumn ? dim2 : focusedLength, // Column width or Beam length
@@ -539,7 +554,8 @@ html_content = f"""
             if (isColumn) {{
                 cameraFocused.position.set(centerPoint.x + 3.5, centerPoint.y + 0, 5); 
             }} else {{
-                cameraFocused.position.set(centerPoint.x, centerPoint.y - 1, 5); 
+                // Adjust for horizontal beam
+                cameraFocused.position.set(centerPoint.x + 0.5, centerPoint.y, 5); 
             }}
             cameraFocused.lookAt(centerPoint);
         }}
@@ -603,13 +619,16 @@ html_content = f"""
             const vector = point.clone().project(camera3D);
             const clientX = (vector.x * 0.5 + 0.5) * rect.width + rect.left;
             const clientY = (vector.y * -0.5 + 0.5) * rect.height + rect.top;
+            
+            // Lookup section properties
+            const section = sections[data.section_id];
 
             tooltip.style.left = `${{clientX + 10}}px`;
             tooltip.style.top = `${{clientY + 10}}px`;
 
             tooltip.innerHTML = `
                 <p class="font-bold text-lg">${{data.id}} (${{data.type}})</p>
-                <p>Section: ${{data.section.name}}</p>
+                <p>Section: ${{section.name}}</p>
                 <hr class="my-1 border-yellow-600"/>
                 <p>Max Moment: <span class="text-blue-400 font-mono">${{data.forces.M.max.toFixed(1)}} kNm</span></p>
                 <p>Max Shear: <span class="text-red-400 font-mono">${{data.forces.V.max.toFixed(1)}} kN</span></p>
