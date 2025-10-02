@@ -132,21 +132,23 @@ def _get_element_matrices(element, node_coords, load_params, x_lengths, z_length
         
         tributary_width = 0.0
         if 'x' in element['type'] and element['k'] < len(z_lengths):
+            # Beam in X-dir, tributary width is half of Z-bay length
             tributary_width = z_lengths[element['k']] / 2.0
         elif 'z' in element['type'] and element['i'] < len(x_lengths):
+            # Beam in Z-dir, tributary width is half of X-bay length
             tributary_width = x_lengths[element['i']] / 2.0
 
-        w_slab_and_live = q_total_gravity * tributary_width
-        w_total = w_beam_sw + w_slab_and_live # Total UDL magnitude
+        w_total = w_beam_sw + (q_total_gravity * tributary_width) # Total UDL magnitude
         
-        # Assume gravity acts along local z' (DOF 2, 8 for shear; 5, 11 for moment) for major axis bending
+        # Fixed End Forces/Moments for UDL (w*L/2 and w*L^2/12)
         F_local_v = w_total * L / 2.0      
         M_local_rz = w_total * L**2 / 12.0 
 
-        # Shear Forces (P2, P8)
-        P_fixed_local[2] = F_local_v      
-        P_fixed_local[8] = F_local_v
-        # Bending Moments (P5, P11) - Note the signs for equilibrium
+        # --- FIX: Apply load along the local y' axis (DOF 1, 7) for major bending (Izz) ---
+        # Shear Forces (P1, P7)
+        P_fixed_local[1] = F_local_v      
+        P_fixed_local[7] = F_local_v
+        # Bending Moments (P5, P11)
         P_fixed_local[5] = -M_local_rz 
         P_fixed_local[11] = M_local_rz 
         w_udl = w_total # Used for load visualization
@@ -253,7 +255,7 @@ def calculate_gravity_loads(nodes_df, elements, load_params, node_coords):
     for elem in elements:
         _, T, P_fixed_local, _, _ = _get_element_matrices(elem, node_coords, load_params, x_lengths, z_lengths)
         
-        # P_global_elem is the global equivalent nodal force (P_nodal = -P_fixed_global)
+        # P_fixed_global is the fixed-end force vector in global coordinates
         P_fixed_global = T.T @ P_fixed_local 
 
         dof_start_i = node_id_to_dof_start[elem['start']]
@@ -288,7 +290,8 @@ def solve_fea_system(nodes_df, K_global, P_global):
     P_u = P_global[unknown_dofs]
 
     try:
-        if np.linalg.det(K_uu) < 1e-9:
+        # Check for near singular matrix before solving
+        if np.linalg.cond(K_uu) > 1e12 or np.linalg.det(K_uu) < 1e-9:
              st.error("Reduced Stiffness Matrix is singular. Check structure stability (mechanisms).")
              return nodes_df.copy(), np.zeros(total_dofs, dtype=float) 
              
@@ -323,41 +326,45 @@ def calculate_element_end_forces(elements, U_full, node_coords, nodes_df, load_p
     for elem in elements:
         k_local, T, P_fixed_local, w_udl, L = _get_element_matrices(elem, node_coords, load_params, x_lengths, z_lengths)
         
+        # --- FIX: Ensure element length is saved ---
+        elem['L'] = L
+        
         # 1. Get U_global_elem (12x1)
         dof_start_i = node_id_to_dof_start[elem['start']]
         dof_start_j = node_id_to_dof_start[elem['end']]
         global_dofs = np.concatenate((np.arange(dof_start_i, dof_start_i + 6), 
                                       np.arange(dof_start_j, dof_start_j + 6)))
         
-        # Guard against zero-length U_full (solver failure)
         if len(U_full) == 0:
             U_global_elem = np.zeros(12)
         else:
             U_global_elem = U_full[global_dofs]
 
-        # 2. Calculate F_local = k_local * T * U_global - P_fixed_local
-        # F_local order: Px, Py, Pz, Rx, Ry, Rz at Start; Px, Py, Pz, Rx, Ry, Rz at End (in local system)
+        # 2. Calculate F_local = k_local * (T * U_global) - P_fixed_local
+        # F_local order: Px', Py', Pz', Rx', Ry', Rz' at Start (DOFs 0-5); Px', Py', Pz', Rx', Ry', Rz' at End (DOFs 6-11)
         F_local = k_local @ (T @ U_global_elem) - P_fixed_local
         
         # 3. Extract key moments and forces
         # Axial Force (Fx'): Px' at Start (DOF 0)
         Axial_Force = F_local[0]
-        # Major Bending Moment (Mz'): Rz' at Start (DOF 5) and End (DOF 11)
-        M_start = F_local[5] 
-        M_end = F_local[11]
         # Major Shear Force (Vy'): Py' at Start (DOF 1) and End (DOF 7)
         V_start = F_local[1] 
         V_end = F_local[7]
-        
-        # 4. Calculate Max Absolute Values for Tooltip
+        # Major Bending Moment (Mz'): Rz' at Start (DOF 5) and End (DOF 11)
+        M_start = F_local[5] 
+        M_end = F_local[11]
+
+        # 4. Store Results
         elem['Axial_Force'] = Axial_Force
         elem['M_start'] = M_start
         elem['M_end'] = M_end
         elem['UDL_Total'] = w_udl
         
         elem['Max_Abs_Axial'] = abs(Axial_Force)
-        elem['Max_Abs_Moment'] = max(abs(M_start), abs(M_end))
+        # Note: Shear in the middle of a UDL beam is higher than end reactions (V_end = wL/2)
+        # For simplicity, we assume max shear is the larger end reaction magnitude, which is generally true for gravity loads.
         elem['Max_Abs_Shear'] = max(abs(V_start), abs(V_end))
+        elem['Max_Abs_Moment'] = max(abs(M_start), abs(M_end))
         
         elements_with_forces.append(elem)
         
@@ -397,11 +404,11 @@ def perform_analysis(nodes_df, elements, load_params, node_coords):
             lambda x: np.linalg.norm(x[0:3]) if isinstance(x, np.ndarray) and x.shape == (6,) else 0.0
         )
     
-    if max_deflection == 0:
-        st.warning("Calculated displacement is zero. Check loads/boundary conditions or structural stability.")
-    
     if max_deflection > 0:
         st.success(f"FEA Solution Complete. Maximum Y Displacement (Deflection) is **${max_deflection * 1000:.2f} \\text{{ mm}}$**.")
+    else:
+        st.warning("Calculated displacement is zero or near zero. Check loads/boundary conditions or structural stability.")
+
 
     return nodes_df_solved, elements_solved
 
@@ -421,6 +428,24 @@ def plot_3d_frame(nodes_df, elements, display_mode):
 
     node_coords_plot = nodes_df.set_index('id')[['x_plot', 'y_plot', 'z_plot']].to_dict('index')
 
+    # --- Layout Calculations for Dynamic Scaling ---
+    max_x = nodes_df['x'].max() if not nodes_df.empty else 10
+    min_y = nodes_df['y'].min() if not nodes_df.empty else 0
+    max_y = nodes_df['y'].max() if not nodes_df.empty else 10
+    max_z = nodes_df['z'].max() if not nodes_df.empty else 10
+    
+    max_dim = max(max_x, max_y - min_y, max_z)
+    
+    # Calculate a sensible base size factor for load arrows
+    max_total_load = max(elem.get('UDL_Total', 0) * elem.get('L', 1.0) for elem in elements) or 1.0
+    
+    # Target max arrow length to be 5% of the largest structure dimension
+    target_arrow_ratio = 0.05
+    load_scaling_factor = (target_arrow_ratio * max_dim) / max_total_load 
+    # Clamp arrow size bounds
+    min_arrow_size = 0.001 * max_dim
+    max_arrow_size = 0.1 * max_dim
+    
     # 1. Plot Nodes 
     fig.add_trace(go.Scatter3d(
         x=nodes_df['x_plot'], y=nodes_df['y_plot'], z=nodes_df['z_plot'],
@@ -462,8 +487,8 @@ def plot_3d_frame(nodes_df, elements, display_mode):
             
             element_hover_text = (
                 f"**Element ID:** {elem['id']} | **Type:** {elem_type}<br>"
+                f"**Length (L):** {elem.get('L', 0):.2f} m<br>" # L is now guaranteed non-zero if geometry is good
                 f"**Section:** {elem['b_m']*1000:.0f}x{elem['h_m']*1000:.0f} mm (b $\\times$ h)<br>"
-                f"**Length:** {elem.get('L', 0):.2f} m<br>"
                 f"---<br>"
                 f"**MAX FORCES (Abs):**<br>"
                 f"**Axial ($P_{{max}}$):** {max_axial:.2f} kN<br>"
@@ -514,18 +539,20 @@ def plot_3d_frame(nodes_df, elements, display_mode):
                         ))
 
             # --- Load Distribution Visualization (UDL Arrows) ---
-            if display_mode == 'Load Distribution' and 'beam' in elem_type and elem['UDL_Total'] > 0:
+            if display_mode == 'Load Distribution' and 'beam' in elem_type and elem['UDL_Total'] > 0 and max_total_load > 0:
                 mid_x = (p1_xyz[0] + p2_xyz[0]) / 2.0
                 mid_y = (p1_xyz[1] + p2_xyz[1]) / 2.0
                 mid_z = (p1_xyz[2] + p2_xyz[2]) / 2.0
                 
-                # UDL is gravity (in -Y direction)
                 load_magnitude = elem['UDL_Total'] * elem.get('L', 1.0) # Total UDL force
-                arrow_size = np.clip(load_magnitude * 0.05, 0.5, 3) # Scale arrow size
                 
-                # Plot an arrow (cone) or simply a vector/marker at midspan
+                # --- FIX: Use dynamic scaling factor ---
+                arrow_size = load_magnitude * load_scaling_factor
+                arrow_size = np.clip(arrow_size, min_arrow_size, max_arrow_size)
+                
+                # UDL is gravity (in -Y direction). Adjust y position so the tip is on the beam.
                 fig.add_trace(go.Cone(
-                    x=[mid_x], y=[mid_y + arrow_size], z=[mid_z],
+                    x=[mid_x], y=[mid_y + arrow_size * 0.5], z=[mid_z],
                     u=[0], v=[-1], w=[0], # Vector points straight down
                     sizemode="absolute", sizeref=arrow_size * 2, anchor="tip",
                     colorscale=[[0, 'purple'], [1, 'purple']],
@@ -535,11 +562,6 @@ def plot_3d_frame(nodes_df, elements, display_mode):
                 ))
 
     # 3. Layout Configuration 
-    max_x = nodes_df['x'].max() if not nodes_df.empty else 10
-    max_y = nodes_df['y'].max() if not nodes_df.empty else 10
-    max_z = nodes_df['z'].max() if not nodes_df.empty else 10
-    min_y = nodes_df['y'].min() if not nodes_df.empty else 0
-    
     plot_limit_x = max_x * 1.1; plot_limit_z = max_z * 1.1 
     plot_limit_y_top = max_y * 1.1; plot_limit_y_bottom = min_y * 1.1 
     
@@ -616,10 +638,10 @@ if 'node_coords' not in st.session_state: st.session_state['node_coords'] = None
 # Main Page Content
 st.title("3D Frame Analysis: Load and Moment Visualization")
 st.markdown(r"""
-The structural solver now calculates **Element End Moments** based on solved displacements ($\mathbf{U}$) and applied fixed-end forces (gravity load). Hover over any beam or column to see its maximum internal forces.
+The structural solver now returns non-zero results for internal forces and moments. Hover over any beam or column to see its calculated max forces and moment, including the element **Length**.
 
 * **Deflection:** Shows the deformed structure (magnified).
-* **Load Distribution:** Shows the UDL (Uniformly Distributed Load) arrows applied to the beams.
+* **Load Distribution:** Shows the UDL (Uniformly Distributed Load) arrows applied to the beams. The arrows are now scaled dynamically based on the structure size and load magnitude.
 * **Bending Moment:** Shows the element lines colored/sized by the maximum moment, with yellow/cyan markers indicating moments at the nodes.
 """)
 
