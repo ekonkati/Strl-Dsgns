@@ -37,21 +37,14 @@ def calculate_rc_properties(b, h, E, nu=0.2):
     h_val = h / 1000.0  # Convert mm to m
     
     A = b_val * h_val
-    Izz = b_val * h_val**3 / 12.0 # Major bending (about axis parallel to b)
-    Iyy = h_val * b_val**3 / 12.0 # Minor bending (about axis parallel to h)
+    Izz = b_val * h_val**3 / 12.0 # Major bending inertia (about axis parallel to b)
+    Iyy = h_val * b_val**3 / 12.0 # Minor bending inertia (about axis parallel to h)
     
     # Torsional constant J approximation for rectangular section
     b_long = max(b_val, h_val)
     h_short = min(b_val, h_val)
-    # Torsional constant K_t = Beta * b * h^3 (where b >= h)
-    # The coefficient k2 is sometimes used for J = G * k2 * b_long * h_short^3
-    # A simplified engineering approximation (not using the full series solution):
-    k_T = 1.0 # Simple approximation factor (often between 0.2 and 0.33)
-    # We will use the formula J = 1/3 * b_long * h_short^3 * (1 - 0.63 * h_short/b_long) 
-    # which is a common closed-form approximation for J, related to St. Venant's Torsion Theory.
-    
     J = b_long * h_short**3 * (1/3 - 0.21 * (h_short/b_long) * (1 - h_short**4 / (12*b_long**4))) 
-    if J <= 0: J = 0.001 * (b_val * h_val)**2 # Fallback for tiny sections
+    if J <= 0: J = 0.001 * (b_val * h_val)**2 # Fallback
 
     G = E / (2 * (1 + nu))
 
@@ -60,92 +53,7 @@ def calculate_rc_properties(b, h, E, nu=0.2):
         'b_m': b_val, 'h_m': h_val
     }
 
-# --- 2. Geometry Parsing and Generation Functions ---
-
-def generate_grid_geometry(x_lengths, y_heights, z_lengths, foundation_depth, prop_column, prop_beam):
-    """
-    Generates the structural geometry (nodes and elements) based on parsed grid lengths
-    and foundation depth, assigning element-specific properties.
-    """
-    nodes = []
-    elements = []
-    node_id_counter = 1
-
-    cum_x = np.cumsum([0] + x_lengths)
-    above_ground_heights = [0] + y_heights
-    cum_y_above_ground = np.cumsum(above_ground_heights)
-    # y coordinates: Foundation Base (j=0), Ground Level (j=1), then floors (j=2, 3, ...)
-    cum_y = np.insert(cum_y_above_ground, 0, -foundation_depth)
-    cum_z = np.cumsum([0] + z_lengths)
-
-    x_grid_count = len(cum_x)
-    y_grid_count = len(cum_y)
-    z_grid_count = len(cum_z)
-    
-    foundation_base_index = 0
-    ground_level_index = 1
-    node_grid_map = {}
-
-    # 1. Generate Nodes 
-    for i in range(x_grid_count):
-        for j in range(y_grid_count):
-            for k in range(z_grid_count):
-                node = {
-                    'id': node_id_counter, 'x': cum_x[i], 'y': cum_y[j], 'z': cum_z[k],
-                    'support_type': 'Fixed' if j == foundation_base_index else 'None',
-                    'u': np.zeros(6, dtype=float) # Displacement vector [u, v, w, rx, ry, rz]
-                }
-                nodes.append(node)
-                node_grid_map[(i, j, k)] = node_id_counter
-                node_id_counter += 1
-    
-    nodes_df = pd.DataFrame(nodes)
-    node_coords = {n['id']: (n['x'], n['y'], n['z']) for n in nodes}
-    nodes_df.attrs['grid_map'] = node_grid_map
-    nodes_df.attrs['x_lengths'] = x_lengths
-    nodes_df.attrs['z_lengths'] = z_lengths
-
-    # 2. Generate Elements (Beams/Columns) and assign properties
-    element_id_counter = 1
-    for i in range(x_grid_count):
-        for j in range(y_grid_count):
-            for k in range(z_grid_count):
-                current_id = node_grid_map[(i, j, k)]
-
-                # Connection in X direction (Beams) - Only connect beams from ground floor (j=1) upwards
-                if i < x_grid_count - 1 and j >= ground_level_index: 
-                    neighbor_id = node_grid_map[(i + 1, j, k)]
-                    L = x_lengths[i]
-                    elements.append({
-                        'id': element_id_counter, 'start': current_id, 'end': neighbor_id, 'type': 'beam-x', 'L': L,
-                        'i': i, 'j': j, 'k': k, **prop_beam
-                    })
-                    element_id_counter += 1
-
-                # Connection in Y direction (Columns)
-                if j < y_grid_count - 1:
-                    neighbor_id = node_grid_map[(i, j + 1, k)]
-                    L = abs(cum_y[j+1] - cum_y[j])
-                    column_type = 'foundation-column' if j == foundation_base_index else 'column'
-                    elements.append({
-                        'id': element_id_counter, 'start': current_id, 'end': neighbor_id, 'type': column_type, 'L': L,
-                        'i': i, 'j': j, 'k': k, **prop_column
-                    })
-                    element_id_counter += 1
-
-                # Connection in Z direction (Beams) - Only connect beams from ground floor (j=1) upwards
-                if k < z_grid_count - 1 and j >= ground_level_index: 
-                    neighbor_id = node_grid_map[(i, j, k + 1)]
-                    L = z_lengths[k]
-                    elements.append({
-                        'id': element_id_counter, 'start': current_id, 'end': neighbor_id, 'type': 'beam-z', 'L': L,
-                        'i': i, 'j': j, 'k': k, **prop_beam
-                    })
-                    element_id_counter += 1
-
-    return nodes_df, elements, node_coords
-
-# --- 3. FEA Setup Functions (Stiffness Matrix) ---
+# --- 2. Geometry and FEA Matrix Helper Functions ---
 
 def map_degrees_of_freedom(nodes_df):
     """Assigns global degrees of freedom (DOF) indices to each node."""
@@ -158,111 +66,165 @@ def map_degrees_of_freedom(nodes_df):
     st.sidebar.markdown(f"**Total Global DoF:** `{total_dofs}`") 
     return nodes_df
 
-def calculate_element_stiffness(element, node_coords):
+def _get_element_matrices(element, node_coords, load_params, x_lengths, z_lengths):
     """
-    Calculates the 12x12 element stiffness matrix [k] in global coordinates 
-    using element-specific properties (E, G, A, Izz, Iyy, J).
+    Calculates element's local stiffness matrix (k_local), transformation matrix (T), 
+    and local fixed-end force vector (P_fixed_local) from gravity.
     """
-    E = element['E']
-    G = element['G']
-    A = element['A']
-    Izz = element['Izz'] 
-    Iyy = element['Iyy'] 
-    J = element['J']     
-
-    # 1. Geometry and Direction Cosines
-    xi, yi, zi = node_coords[element['start']]
-    xj, yj, zj = node_coords[element['end']]
+    E = element['E']; G = element['G']; A = element['A']; Izz = element['Izz']; Iyy = element['Iyy']; J = element['J']     
+    xi, yi, zi = node_coords[element['start']]; xj, yj, zj = node_coords[element['end']]
     
     L = np.sqrt((xj - xi)**2 + (yj - yi)**2 + (zj - zi)**2)
     if L < 1e-6: # Check for near zero length
-        return np.zeros((12, 12))
+        return np.zeros((12, 12)), np.zeros((12, 12)), np.zeros(12), 0.0, L
 
-    l = (xj - xi) / L
-    m = (yj - yi) / L
-    n = (zj - zi) / L
+    l = (xj - xi) / L; m = (yj - yi) / L; n = (zj - zi) / L
 
     x_prime_vec = np.array([l, m, n])
-    
-    # Define reference vector for calculating Y' and Z'
-    if np.isclose(l**2 + n**2, 0): # Element is vertical (parallel to global Y)
-        V_ref = np.array([0, 0, 1]) 
-    else:
-        V_ref = np.array([0, 1, 0]) 
+    if np.isclose(l**2 + n**2, 0): V_ref = np.array([0, 0, 1]) # Vertical element
+    else: V_ref = np.array([0, 1, 0]) # Horizontal element reference
 
-    # Z' = X' x V_ref
     z_prime_vec = np.cross(x_prime_vec, V_ref)
     norm_z = np.linalg.norm(z_prime_vec)
     z_prime_vec = z_prime_vec / norm_z if norm_z > 1e-6 else np.array([0, 0, 0])
-    
-    # Y' = Z' x X'
     y_prime_vec = np.cross(z_prime_vec, x_prime_vec)
     
-    # Ensure vectors are nearly orthonormal (optional but good sanity check)
-    # If a vector is near zero, it indicates a problematic alignment, but the checks above usually handle this.
+    # 1. Transformation Matrix (T) - 12x12
+    T_3x3 = np.array([x_prime_vec, y_prime_vec, z_prime_vec], dtype=float)
+    T = np.zeros((12, 12), dtype=float)
+    for i in range(4): T[i*3:i*3+3, i*3:i*3+3] = T_3x3
 
     # 2. Local Stiffness Matrix (k_local) - 12x12
     k_local = np.zeros((12, 12), dtype=float)
-    
-    # Constants
-    C1 = E * A / L             # Axial
-    C4 = G * J / L             # Torsion
-    C2 = 12 * E * Izz / (L**3) # Shear/Bending z' (Major)
-    C3 = 6 * E * Izz / (L**2)
-    C5 = 4 * E * Izz / L
-    C6 = 2 * E * Izz / L
-    C7 = 12 * E * Iyy / (L**3) # Shear/Bending y' (Minor)
-    C8 = 6 * E * Iyy / (L**2)
-    C9 = 4 * E * Iyy / L
-    C10 = 2 * E * Iyy / L
+    C1 = E * A / L; C4 = G * J / L; C2 = 12 * E * Izz / (L**3); C3 = 6 * E * Izz / (L**2)
+    C5 = 4 * E * Izz / L; C6 = 2 * E * Izz / L; C7 = 12 * E * Iyy / (L**3); C8 = 6 * E * Iyy / (L**2)
+    C9 = 4 * E * Iyy / L; C10 = 2 * E * Iyy / L
     
     # Populate k_local (standard 3D beam element stiffness matrix)
-    k_local[0, 0], k_local[6, 6] = C1, C1  
-    k_local[1, 1], k_local[7, 7] = C2, C2  
-    k_local[2, 2], k_local[8, 8] = C7, C7  
-    k_local[3, 3], k_local[9, 9] = C4, C4  
-    k_local[4, 4], k_local[10, 10] = C9, C9 
-    k_local[5, 5], k_local[11, 11] = C5, C5 
+    k_local[0, 0], k_local[6, 6] = C1, C1  ; k_local[0, 6], k_local[6, 0] = -C1, -C1
+    k_local[3, 3], k_local[9, 9] = C4, C4  ; k_local[3, 9], k_local[9, 3] = -C4, -C4
     
-    k_local[0, 6], k_local[6, 0] = -C1, -C1
-    k_local[3, 9], k_local[9, 3] = -C4, -C4
+    k_local[1, 1], k_local[7, 7] = C2, C2  ; k_local[1, 7], k_local[7, 1] = -C2, -C2
+    k_local[5, 5], k_local[11, 11] = C5, C5; k_local[5, 11], k_local[11, 5] = C6, C6
+    k_local[1, 5], k_local[5, 1] = C3, C3  ; k_local[1, 11], k_local[11, 1] = C3, C3
+    k_local[7, 5], k_local[5, 7] = -C3, -C3; k_local[7, 11], k_local[11, 7] = -C3, -C3
 
-    k_local[1, 7], k_local[7, 1] = -C2, -C2
-    k_local[2, 8], k_local[8, 2] = -C7, -C7
+    k_local[2, 2], k_local[8, 8] = C7, C7  ; k_local[2, 8], k_local[8, 2] = -C7, -C7
+    k_local[4, 4], k_local[10, 10] = C9, C9; k_local[4, 10], k_local[10, 4] = C10, C10
+    k_local[2, 4], k_local[4, 2] = -C8, -C8; k_local[2, 10], k_local[10, 2] = -C8, -C8
+    k_local[8, 4], k_local[4, 8] = C8, C8  ; k_local[8, 10], k_local[10, 8] = C8, C8
     
-    k_local[1, 5], k_local[5, 1] = C3, C3
-    k_local[1, 11], k_local[11, 1] = C3, C3
-    k_local[7, 5], k_local[5, 7] = -C3, -C3
-    k_local[7, 11], k_local[11, 7] = -C3, -C3
+    # 3. Local Fixed-End Force Vector (P_fixed_local)
+    P_fixed_local = np.zeros(12, dtype=float)
+    q_total_gravity = (load_params['slab_density'] * load_params['slab_thickness'] + 
+                       load_params['finish_load'] + load_params['live_load'])
+    w_udl = 0.0 # Total UDL magnitude (will be negative, acting downwards)
     
-    k_local[2, 4], k_local[4, 2] = -C8, -C8
-    k_local[2, 10], k_local[10, 2] = -C8, -C8
-    k_local[8, 4], k_local[4, 8] = C8, C8
-    k_local[8, 10], k_local[10, 8] = C8, C8
-    
-    k_local[5, 11], k_local[11, 5] = C6, C6
-    k_local[4, 10], k_local[10, 4] = C10, C10
-    
-    # 3. Transformation Matrix (T) - 12x12
-    T_3x3 = np.array([x_prime_vec, y_prime_vec, z_prime_vec], dtype=float)
-    
-    T = np.zeros((12, 12), dtype=float)
-    for i in range(4):
-        T[i*3:i*3+3, i*3:i*3+3] = T_3x3
+    if 'column' in element['type']:
+        w_sw = load_params['slab_density'] * element['A']
+        # Axial load in local u (DOF 0 and 6). Local x' is aligned with global Y for a vertical column.
+        P_fixed_local[0] = -w_sw * L / 2.0  
+        P_fixed_local[6] = -w_sw * L / 2.0
+        w_udl = w_sw # Used for load visualization
         
-    # 4. Global Stiffness Matrix (k_global)
-    k_global = T.T @ k_local @ T
-    
-    return k_global
+    elif 'beam' in element['type']:
+        w_beam_sw = load_params['slab_density'] * element['A']
+        
+        tributary_width = 0.0
+        if 'x' in element['type'] and element['k'] < len(z_lengths):
+            tributary_width = z_lengths[element['k']] / 2.0
+        elif 'z' in element['type'] and element['i'] < len(x_lengths):
+            tributary_width = x_lengths[element['i']] / 2.0
 
-def assemble_global_stiffness(nodes_df, elements, node_coords):
+        w_slab_and_live = q_total_gravity * tributary_width
+        w_total = w_beam_sw + w_slab_and_live # Total UDL magnitude
+        
+        # Assume gravity acts along local z' (DOF 2, 8 for shear; 5, 11 for moment) for major axis bending
+        F_local_v = w_total * L / 2.0      
+        M_local_rz = w_total * L**2 / 12.0 
+
+        # Shear Forces (P2, P8)
+        P_fixed_local[2] = F_local_v      
+        P_fixed_local[8] = F_local_v
+        # Bending Moments (P5, P11) - Note the signs for equilibrium
+        P_fixed_local[5] = -M_local_rz 
+        P_fixed_local[11] = M_local_rz 
+        w_udl = w_total # Used for load visualization
+
+    return k_local, T, P_fixed_local, w_udl, L
+
+# --- 3. Geometry Generation and FEA Setup Functions (Assembly, Solve, Force) ---
+
+def generate_grid_geometry(x_lengths, y_heights, z_lengths, foundation_depth, prop_column, prop_beam):
+    """Generates the structural geometry (nodes and elements)."""
+    nodes = []
+    elements = []
+    node_id_counter = 1
+
+    cum_x = np.cumsum([0] + x_lengths); above_ground_heights = [0] + y_heights
+    cum_y_above_ground = np.cumsum(above_ground_heights)
+    cum_y = np.insert(cum_y_above_ground, 0, -foundation_depth)
+    cum_z = np.cumsum([0] + z_lengths)
+
+    x_grid_count = len(cum_x); y_grid_count = len(cum_y); z_grid_count = len(cum_z)
+    ground_level_index = 1
+    node_grid_map = {}
+
+    # 1. Generate Nodes 
+    for i in range(x_grid_count):
+        for j in range(y_grid_count):
+            for k in range(z_grid_count):
+                node = {'id': node_id_counter, 'x': cum_x[i], 'y': cum_y[j], 'z': cum_z[k],
+                        'support_type': 'Fixed' if j == 0 else 'None',
+                        'u': np.zeros(6, dtype=float)}
+                nodes.append(node)
+                node_grid_map[(i, j, k)] = node_id_counter
+                node_id_counter += 1
+    
+    nodes_df = pd.DataFrame(nodes)
+    node_coords = {n['id']: (n['x'], n['y'], n['z']) for n in nodes}
+    nodes_df.attrs['grid_map'] = node_grid_map
+    nodes_df.attrs['x_lengths'] = x_lengths
+    nodes_df.attrs['z_lengths'] = z_lengths
+
+    # 2. Generate Elements
+    element_id_counter = 1
+    for i in range(x_grid_count):
+        for j in range(y_grid_count):
+            for k in range(z_grid_count):
+                current_id = node_grid_map[(i, j, k)]
+
+                if i < x_grid_count - 1 and j >= ground_level_index: # Beam-X
+                    elements.append({
+                        'id': element_id_counter, 'start': current_id, 'end': node_grid_map[(i + 1, j, k)], 
+                        'type': 'beam-x', 'i': i, 'j': j, 'k': k, **prop_beam
+                    })
+                    element_id_counter += 1
+                if j < y_grid_count - 1: # Column-Y
+                    elements.append({
+                        'id': element_id_counter, 'start': current_id, 'end': node_grid_map[(i, j + 1, k)], 
+                        'type': 'column', 'i': i, 'j': j, 'k': k, **prop_column
+                    })
+                    element_id_counter += 1
+                if k < z_grid_count - 1 and j >= ground_level_index: # Beam-Z
+                    elements.append({
+                        'id': element_id_counter, 'start': current_id, 'end': node_grid_map[(i, j, k + 1)], 
+                        'type': 'beam-z', 'i': i, 'j': j, 'k': k, **prop_beam
+                    })
+                    element_id_counter += 1
+
+    return nodes_df, elements, node_coords
+
+def assemble_global_stiffness(nodes_df, elements, node_coords, load_params):
     """Assembles the Global Stiffness Matrix [K]."""
     total_dofs = nodes_df.attrs.get('total_dofs', 0)
     K_global = np.zeros((total_dofs, total_dofs), dtype=float)
     node_id_to_dof_start = nodes_df.set_index('id')['dof_start_index'].to_dict()
 
     for elem in elements:
-        k_global_elem = calculate_element_stiffness(elem, node_coords)
+        k_local, T, _, _, _ = _get_element_matrices(elem, node_coords, load_params, nodes_df.attrs['x_lengths'], nodes_df.attrs['z_lengths'])
+        
+        k_global_elem = T.T @ k_local @ T
         
         dof_start_i = node_id_to_dof_start[elem['start']]
         dof_start_j = node_id_to_dof_start[elem['end']]
@@ -278,139 +240,43 @@ def assemble_global_stiffness(nodes_df, elements, node_coords):
     
     return K_global
 
-# --- 4. Load Calculation & Vector Assembly ---
-
 def calculate_gravity_loads(nodes_df, elements, load_params, node_coords):
-    """
-    Calculates element fixed-end forces (FEFs) from gravity loads (Self-weight + Slab Load).
-    Assumes gravity acts in the negative Y direction.
-    """
+    """Calculates the Global Nodal Load Vector P_global."""
     total_dofs = nodes_df.attrs.get('total_dofs', 0)
-    if total_dofs == 0:
-        return np.zeros(0, dtype=float)
+    if total_dofs == 0: return np.zeros(0, dtype=float)
         
     P_global = np.zeros(total_dofs, dtype=float)
     node_id_to_dof_start = nodes_df.set_index('id')['dof_start_index'].to_dict()
     x_lengths = nodes_df.attrs['x_lengths']
     z_lengths = nodes_df.attrs['z_lengths']
-    
-    # 1. Total Floor Area Load (q_floor)
-    concrete_density = load_params['slab_density']
-    slab_thickness = load_params['slab_thickness']
-    finish_load = load_params['finish_load']
-    live_load = load_params['live_load']
-    
-    q_slab_dl = concrete_density * slab_thickness + finish_load
-    q_total_ll = live_load
-    q_total_gravity = q_slab_dl + q_total_ll # kN/m^2 (Unfactored)
-
-    st.markdown(f"**Calculated Gravity Floor Pressure (Unfactored):** $ {q_total_gravity:.2f} \\frac{{kN}}{{m^2}} $")
 
     for elem in elements:
-        P_elem = np.zeros(12, dtype=float)
-        L = elem['L']
+        _, T, P_fixed_local, _, _ = _get_element_matrices(elem, node_coords, load_params, x_lengths, z_lengths)
         
-        if 'column' in elem['type']:
-            # Column Self-Weight (Axial load in Y direction, which is global Y)
-            w_sw = concrete_density * elem['A']
-            # Only 50% of the UDL load is applied to the end nodes as point load in the local axial direction
-            # For columns (local x' is along global y), the load is axial (DOF 0 and 6)
-            P_elem[0] = -w_sw * L / 2.0  # Force at start node (Local u)
-            P_elem[6] = -w_sw * L / 2.0  # Force at end node (Local u)
-            
-        elif 'beam' in elem['type']:
-            # Beam Self-Weight (UDL in global Y)
-            w_beam_sw = concrete_density * elem['A']
-            
-            # Tributary Area Load from Slab (UDL in global Y)
-            tributary_width = 0.0
-            if 'x' in elem['type'] and elem['k'] < len(z_lengths):
-                # Beam in X direction (tributary width is Lz / 2)
-                tributary_width = z_lengths[elem['k']] / 2.0
-            elif 'z' in elem['type'] and elem['i'] < len(x_lengths):
-                # Beam in Z direction (tributary width is Lx / 2)
-                tributary_width = x_lengths[elem['i']] / 2.0
+        # P_global_elem is the global equivalent nodal force (P_nodal = -P_fixed_global)
+        P_fixed_global = T.T @ P_fixed_local 
 
-            w_slab = q_total_gravity * tributary_width
-            w_total = w_beam_sw + w_slab # Total UDL on beam, acts in -Global Y direction
-
-            # For a horizontal beam (X' in XZ plane), Global Y is aligned with local Z' or Y', 
-            # depending on the transformation matrix T. For simplicity, we assume the beam is aligned 
-            # such that gravity acts along local Z' (usually the major axis bending direction).
-
-            # The load vector transform handles the orientation. Here we calculate FEFs for a UDL 
-            # acting perpendicular to the beam axis (in the plane of bending, local z')
-            
-            # Fixed-End Shear Forces and Bending Moments for UDL:
-            F_local_v = w_total * L / 2.0  # Forces
-            M_local_rz = w_total * L**2 / 12.0 # Moments
-
-            # Apply FEF components in local coordinates (Shear in P2/P8, Moment in P4/P10 - based on typical local z' bending):
-            P_elem[2] = -F_local_v  # Shear Force at start (P2)
-            P_elem[8] = -F_local_v  # Shear Force at end (P8)
-            P_elem[4] = -M_local_rz # Moment at start (P4 - rotation about local y')
-            P_elem[10] = M_local_rz # Moment at end (P10 - rotation about local y')
-
-        # Transform P_elem (local) to P_global_elem (global) using the transformation matrix T
-        
-        # 1. Geometry and Direction Cosines (repeated from stiffness calc to get T)
-        xi, yi, zi = node_coords[elem['start']]
-        xj, yj, zj = node_coords[elem['end']]
-        
-        l = (xj - xi) / L
-        m = (yj - yi) / L
-        n = (zj - zi) / L
-
-        x_prime_vec = np.array([l, m, n])
-        if np.isclose(l**2 + n**2, 0): V_ref = np.array([0, 0, 1]) 
-        else: V_ref = np.array([0, 1, 0]) 
-
-        z_prime_vec = np.cross(x_prime_vec, V_ref)
-        norm_z = np.linalg.norm(z_prime_vec)
-        z_prime_vec = z_prime_vec / norm_z if norm_z > 1e-6 else np.array([0, 0, 0])
-        y_prime_vec = np.cross(z_prime_vec, x_prime_vec)
-        T_3x3 = np.array([x_prime_vec, y_prime_vec, z_prime_vec], dtype=float)
-        
-        T = np.zeros((12, 12), dtype=float)
-        for i in range(4): T[i*3:i*3+3, i*3:i*3+3] = T_3x3
-
-        P_global_elem = T.T @ P_elem # Transform fixed-end force vector (reaction)
-
-        # Apply to global P vector (P_nodal = -P_fixed_end_actions)
         dof_start_i = node_id_to_dof_start[elem['start']]
         dof_start_j = node_id_to_dof_start[elem['end']]
         global_dofs = np.concatenate((np.arange(dof_start_i, dof_start_i + 6), 
                                       np.arange(dof_start_j, dof_start_j + 6)))
         
-        # We are adding the negative of the FEF into P_global to represent the equivalent nodal load
+        # P_global is the negative of the fixed-end forces (equivalent nodal loads)
         for i, global_dof in enumerate(global_dofs):
-            P_global[global_dof] += P_global_elem[i]
+            P_global[global_dof] -= P_fixed_global[i]
 
     return P_global
 
-# --- 5. FEA Solver and Displacement Calculation (Updated for robustness) ---
-
 def solve_fea_system(nodes_df, K_global, P_global):
-    """
-    Applies boundary conditions (Fixed Support) and solves the system K*U = P for displacements U.
-    Ensures U_full is always a numpy array of floats, even upon failure.
-    """
+    """Applies boundary conditions and solves the system K*U = P for displacements U."""
     total_dofs = K_global.shape[0]
-    
-    # Check if there are any DOFs to solve for
-    if total_dofs == 0:
-        st.error("Cannot solve: Total degrees of freedom is zero.")
-        return nodes_df.copy(), np.zeros(0, dtype=float)
+    if total_dofs == 0: return nodes_df.copy(), np.zeros(0, dtype=float)
         
-    # 1. Identify Constrained (Known) DoFs
     known_dofs = [] 
-    
     for _, row in nodes_df.iterrows():
         if row['support_type'] == 'Fixed':
-            start_index = row['dof_start_index']
-            known_dofs.extend(range(start_index, start_index + 6))
+            known_dofs.extend(range(row['dof_start_index'], row['dof_start_index'] + 6))
 
-    # 2. Identify Unknown (Free) DoFs
     all_dofs = np.arange(total_dofs)
     unknown_dofs = np.setdiff1d(all_dofs, known_dofs)
     
@@ -418,13 +284,10 @@ def solve_fea_system(nodes_df, K_global, P_global):
         st.error("No free degrees of freedom found. Structure is overly constrained.")
         return nodes_df.copy(), np.zeros(total_dofs, dtype=float)
 
-    # 3. Partition Matrices (Reduction)
     K_uu = K_global[np.ix_(unknown_dofs, unknown_dofs)]
     P_u = P_global[unknown_dofs]
 
-    # 4. Solve for Unknown Displacements (U_u)
     try:
-        # Check for singularity/near-singularity
         if np.linalg.det(K_uu) < 1e-9:
              st.error("Reduced Stiffness Matrix is singular. Check structure stability (mechanisms).")
              return nodes_df.copy(), np.zeros(total_dofs, dtype=float) 
@@ -434,11 +297,9 @@ def solve_fea_system(nodes_df, K_global, P_global):
         st.error(f"Linear algebra error during solution: {e}. Cannot solve system.")
         return nodes_df.copy(), np.zeros(total_dofs, dtype=float)
 
-    # 5. Assemble Full Displacement Vector (U)
     U_full = np.zeros(total_dofs, dtype=float)
     U_full[unknown_dofs] = U_u
     
-    # 6. Update Nodes DataFrame with Results
     temp_nodes_df = nodes_df.copy() 
     temp_nodes_df['u'] = temp_nodes_df['u'].astype(object) 
     
@@ -448,123 +309,106 @@ def solve_fea_system(nodes_df, K_global, P_global):
 
     return temp_nodes_df, U_full
 
-def perform_analysis(nodes_df, elements, load_params, node_coords):
-    """
-    Performs full FEA setup, solves for displacement under gravity, and computes mock internal forces.
-    """
+def calculate_element_end_forces(elements, U_full, node_coords, nodes_df, load_params):
+    """Calculates internal forces for each element F_local = k_local * T * U_global - P_fixed_local."""
+    x_lengths = nodes_df.attrs['x_lengths']
+    z_lengths = nodes_df.attrs['z_lengths']
+    node_id_to_dof_start = nodes_df.set_index('id')['dof_start_index'].to_dict()
     
-    # 1. Map Degrees of Freedom (DOF)
+    elements_with_forces = []
+    
+    for elem in elements:
+        k_local, T, P_fixed_local, w_udl, L = _get_element_matrices(elem, node_coords, load_params, x_lengths, z_lengths)
+        
+        # 1. Get U_global_elem (12x1)
+        dof_start_i = node_id_to_dof_start[elem['start']]
+        dof_start_j = node_id_to_dof_start[elem['end']]
+        global_dofs = np.concatenate((np.arange(dof_start_i, dof_start_i + 6), 
+                                      np.arange(dof_start_j, dof_start_j + 6)))
+        
+        # Guard against zero-length U_full (solver failure)
+        if len(U_full) == 0:
+            U_global_elem = np.zeros(12)
+        else:
+            U_global_elem = U_full[global_dofs]
+
+        # 2. Calculate F_local = k_local * T * U_global - P_fixed_local
+        F_local = k_local @ (T @ U_global_elem) - P_fixed_local
+        
+        # 3. Extract key moments and forces
+        # Bending Moment Mz' (DOFs 5 and 11) is the major axis moment (gravity bending for horizontal beams)
+        elem['M_start'] = F_local[5] 
+        elem['M_end'] = F_local[11]
+        elem['Axial_Force'] = F_local[0]
+        elem['UDL_Total'] = w_udl
+        
+        elements_with_forces.append(elem)
+        
+    return elements_with_forces
+
+def perform_analysis(nodes_df, elements, load_params, node_coords):
+    """Performs full FEA setup, solves for displacement and internal forces."""
+    
     nodes_df = map_degrees_of_freedom(nodes_df)
     
-    # 2. Assemble Global Stiffness Matrix (K)
-    K_global = assemble_global_stiffness(nodes_df, elements, node_coords)
+    # 1. Assemble Global Stiffness Matrix (K)
+    K_global = assemble_global_stiffness(nodes_df, elements, node_coords, load_params)
     st.session_state['K_global'] = K_global
     
-    # 3. Generate Global Load Vector (P)
+    # 2. Generate Global Load Vector (P)
     P_global = calculate_gravity_loads(nodes_df, elements, load_params, node_coords)
     
-    # 4. Solve System for Displacement (U)
+    # 3. Solve System for Displacement (U)
     with st.spinner('Solving for displacement vector U...'):
         nodes_df_solved, U_full = solve_fea_system(nodes_df, K_global, P_global) 
     
-    # 5. Calculate Deflection Magnitude and Max Deflection (Reinforced Check)
+    # 4. Calculate Internal Element Forces (F)
+    elements_solved = calculate_element_end_forces(elements, U_full, node_coords, nodes_df_solved, load_params)
+    
+    # 5. Calculate Deflection Magnitude and Max Deflection
     max_deflection = 0.0
     
     if isinstance(U_full, np.ndarray) and len(U_full) > 0:
-        # Find the indices corresponding to the Y-translation (V) for every node (DOF index 1, 7, 13, ...)
         y_indices = np.arange(1, len(U_full), 6)
         
         if y_indices.size > 0:
             abs_displacements = np.abs(U_full[y_indices])
-            # Check for non-finite values (NaN, Inf) which can cause float formatting errors
             if np.all(np.isfinite(abs_displacements)):
                 max_deflection = np.max(abs_displacements)
-            else:
-                st.error("Calculated displacements contain non-finite values (NaN or Inf). This likely indicates a structural mechanism or extremely large displacement.")
-        
-        # Calculate overall deflection magnitude for plot sizing
-        for index, row in nodes_df_solved.iterrows():
-            u_vector = row['u']
-            # Ensure u_vector is valid before calculating norm
-            if isinstance(u_vector, np.ndarray) and u_vector.shape == (6,):
-                nodes_df_solved.loc[index, 'deflection_magnitude'] = np.linalg.norm(u_vector[0:3]) 
-            else:
-                 nodes_df_solved.loc[index, 'deflection_magnitude'] = 0.0
+            
+        nodes_df_solved['deflection_magnitude'] = nodes_df_solved['u'].apply(
+            lambda x: np.linalg.norm(x[0:3]) if isinstance(x, np.ndarray) and x.shape == (6,) else 0.0
+        )
     
     if max_deflection == 0:
-        st.warning("Calculated displacement is zero or non-finite. Check loads/boundary conditions or structural stability.")
-        
-    # Mock internal forces (Aesthetic only - full back-transformation required for real forces)
-    concrete_density = load_params['slab_density']
-    q_total_gravity = (concrete_density * load_params['slab_thickness'] + load_params['finish_load'] + load_params['live_load'])
+        st.warning("Calculated displacement is zero. Check loads/boundary conditions or structural stability.")
+    
+    if max_deflection > 0:
+        st.success(f"FEA Solution Complete. Maximum Y Displacement (Deflection) is **${max_deflection * 1000:.2f} \\text{{ mm}}$**.")
 
-    for elem in elements:
-        if 'beam' in elem['type']:
-            L = elem['L']
-            mock_force_base = 0.5 * q_total_gravity * L**2 * 0.1 
-            elem['BM'] = np.random.uniform(mock_force_base * 0.8, mock_force_base * 1.2)
-            elem['SF'] = np.random.uniform(mock_force_base * 0.5, mock_force_base * 0.8)
-        elif 'column' in elem['type']:
-            L = elem['L']
-            w_col_sw = concrete_density * elem['A']
-            mock_force_base = w_col_sw * L * 0.5 
-            elem['BM'] = np.random.uniform(mock_force_base * 0.1, mock_force_base * 0.2) 
-            elem['SF'] = np.random.uniform(mock_force_base * 0.05, mock_force_base * 0.1) 
-            
-    # This line now uses the safely calculated float 'max_deflection'
-    st.success(f"FEA Solution Complete. Maximum Y Displacement (Deflection) is **${max_deflection * 1000:.2f} \\text{{ mm}}$** (Under unfactored gravity load).")
-    st.info("Bending Moment (BM) and Shear Force (SF) displayed are conceptual approximations for visualization only.")
+    return nodes_df_solved, elements_solved
 
-    return nodes_df_solved, elements
-
-# --- 6. Plotly Visualization Function ---
-def plot_3d_frame(nodes_df, elements, node_coords, display_mode):
+# --- 4. Plotly Visualization Function (Updated) ---
+def plot_3d_frame(nodes_df, elements, display_mode):
     """
-    Creates an interactive 3D Plotly figure for the frame structure,
-    with options to show Deflection, BM, or SF. Line width is proportional to member depth (h_m).
+    Creates an interactive 3D Plotly figure with visualizations for 
+    Deflection, Load Distribution, or Bending Moment.
     """
     fig = go.Figure()
-
-    # Determine plot properties based on display mode
-    if display_mode == 'Bending Moment':
-        trace_name_suffix = ' (BM)'
-        result_key = 'BM'
-        line_color_mode = 'red'
-        force_width_scale = 0.05
-    elif display_mode == 'Shear Force':
-        trace_name_suffix = ' (SF)'
-        result_key = 'SF'
-        line_color_mode = 'blue'
-        force_width_scale = 0.05
-    else: # Default: Deflection or Geometry
-        trace_name_suffix = ''
-        result_key = None
-        line_color_mode = None
-        
-    # Scale factor for displacement visualization
-    scale_factor = 200 
     
-    nodes_df['x_plot'] = nodes_df.apply(lambda row: row['x'] + row['u'][0] * scale_factor if isinstance(row['u'], np.ndarray) else row['x'], axis=1)
-    nodes_df['y_plot'] = nodes_df.apply(lambda row: row['y'] + row['u'][1] * scale_factor if isinstance(row['u'], np.ndarray) else row['y'], axis=1)
-    nodes_df['z_plot'] = nodes_df.apply(lambda row: row['z'] + row['u'][2] * scale_factor if isinstance(row['u'], np.ndarray) else row['z'], axis=1)
+    scale_factor = 200 # For displacement visualization
+    
+    nodes_df['x_plot'] = nodes_df.apply(lambda row: row['x'] + row['u'][0] * scale_factor if isinstance(row['u'], np.ndarray) and display_mode == 'Deflection' else row['x'], axis=1)
+    nodes_df['y_plot'] = nodes_df.apply(lambda row: row['y'] + row['u'][1] * scale_factor if isinstance(row['u'], np.ndarray) and display_mode == 'Deflection' else row['y'], axis=1)
+    nodes_df['z_plot'] = nodes_df.apply(lambda row: row['z'] + row['u'][2] * scale_factor if isinstance(row['u'], np.ndarray) and display_mode == 'Deflection' else row['z'], axis=1)
 
-    if display_mode in ['Geometry/Supports', 'Bending Moment', 'Shear Force']:
-        # Show undeformed geometry for force diagrams
-        nodes_df['x_plot'] = nodes_df['x']
-        nodes_df['y_plot'] = nodes_df['y']
-        nodes_df['z_plot'] = nodes_df['z']
-        
+    node_coords_plot = nodes_df.set_index('id')[['x_plot', 'y_plot', 'z_plot']].to_dict('index')
+
     # 1. Plot Nodes 
     fig.add_trace(go.Scatter3d(
-        x=nodes_df['x_plot'],
-        y=nodes_df['y_plot'],
-        z=nodes_df['z_plot'],
+        x=nodes_df['x_plot'], y=nodes_df['y_plot'], z=nodes_df['z_plot'],
         mode='markers',
-        marker=dict(
-            size=5, 
-            color=nodes_df['support_type'].apply(lambda x: 'red' if x == 'Fixed' else 'green'), 
-            opacity=0.8
-        ),
+        marker=dict(size=5, color=nodes_df['support_type'].apply(lambda x: 'red' if x == 'Fixed' else 'green'), opacity=0.8),
         hoverinfo='text',
         text=[
             f"Node ID: {row['id']}<br>Coords: ({row['x']:.2f}, {row['y']:.2f}, {row['z']:.2f})<br>"
@@ -575,65 +419,103 @@ def plot_3d_frame(nodes_df, elements, node_coords, display_mode):
         name='Nodes / Supports'
     ))
 
-    # 2. Plot Elements (Line Segments)
-    type_colors = {'foundation-column': 'darkorange', 'column': 'darkorchid', 'beam-x': 'royalblue', 'beam-z': 'darkcyan'}
-    
-    # Calculate global max h for normalization (optional, but good for consistent visual scale)
-    max_h = max(elem.get('h_m', 0.5) for elem in elements) * 1000 # Max depth in mm
+    # 2. Plot Elements (Geometry)
+    type_colors = {'column': 'darkorchid', 'beam-x': 'royalblue', 'beam-z': 'darkcyan'}
+    max_moment = max(abs(elem.get('M_start', 0)) for elem in elements) or 1.0
     
     for elem_type, elems in pd.DataFrame(elements).groupby('type'):
         
         for index, elem in elems.iterrows():
-            p1_row = nodes_df[nodes_df['id'] == elem['start']].iloc[0]
-            p2_row = nodes_df[nodes_df['id'] == elem['end']].iloc[0]
-
-            p1_plot = (p1_row['x_plot'], p1_row['y_plot'], p1_row['z_plot'])
-            p2_plot = (p2_row['x_plot'], p2_row['y_plot'], p2_row['z_plot'])
+            p1 = node_coords_plot[elem['start']]; p2 = node_coords_plot[elem['end']]
+            p1_xyz = (p1['x_plot'], p1['y_plot'], p1['z_plot'])
+            p2_xyz = (p2['x_plot'], p2['y_plot'], p2['z_plot'])
             
-            # --- Realistic Visualization based on member size ---
-            h_mm = elem.get('h_m', 0.5) * 1000 # Depth in mm
-            
-            # Base width proportional to h (e.g., scale 1mm depth to 0.02 Plotly width)
-            # Clamped between a min (2) and a max (15) width
-            base_width = np.clip(h_mm * 0.02, 2, 15) 
-            
+            # Line width proportional to member depth (h_m)
+            h_mm = elem.get('h_m', 0.5) * 1000 
+            base_width = np.clip(h_mm * 0.025, 2, 15) 
             line_width = base_width
-            current_color = line_color_mode if line_color_mode else type_colors[elem_type]
+            current_color = type_colors.get(elem_type, 'gray')
             
-            # If displaying forces, adjust width and color
-            if result_key:
-                 line_width += np.abs(elem.get(result_key, 0)) * force_width_scale
-                 
+            element_hover_text = (
+                f"Element ID: {elem['id']}<br>Type: {elem_type}<br>"
+                f"Section: {elem['b_m']*1000:.0f}x{elem['h_m']*1000:.0f} mm<br>"
+                f"L: {elem.get('L', 0):.2f} m"
+            )
+            
+            # --- Bending Moment Coloring/Sizing ---
+            moment_text = ""
+            if display_mode == 'Bending Moment':
+                moment_text = f"<br>M_start: {elem.get('M_start', 0):.2f} kNm<br>M_end: {elem.get('M_end', 0):.2f} kNm"
+                
+                # Color code by magnitude (Red=High, Blue=Low)
+                M_max_abs = max(abs(elem.get('M_start', 0)), abs(elem.get('M_end', 0)))
+                # Normalize moment for color scale 0 to 1
+                norm_moment = M_max_abs / max_moment 
+                
+                # Line width increase based on max moment in element
+                line_width = base_width + norm_moment * 5 
+                
+                # Interpolate color (e.g., from blue to red)
+                r = int(255 * norm_moment)
+                b = int(255 * (1 - norm_moment))
+                current_color = f'rgb({r}, 0, {b})'
+            
             fig.add_trace(go.Scatter3d(
-                x=[p1_plot[0], p2_plot[0]],
-                y=[p1_plot[1], p2_plot[1]],
-                z=[p1_plot[2], p2_plot[2]],
-                mode='lines',
-                line=dict(
-                    color=current_color, 
-                    width=line_width 
-                ),
-                name=None, # Hide individual names
-                hoverinfo='text',
-                showlegend=(index == 0), # Only show legend entry once per type
-                text=f"Element ID: {elem['id']}<br>Type: {elem_type}<br>L: {elem['L']:.2f} m<br>H: {h_mm:.0f} mm<br>" + 
-                     (f"BM: {elem.get('BM', 0):.2f} kNm" if 'BM' in elem else "") +
-                     (f"SF: {elem.get('SF', 0):.2f} kN" if 'SF' in elem else "")
+                x=[p1_xyz[0], p2_xyz[0]], y=[p1_xyz[1], p2_xyz[1]], z=[p1_xyz[2], p2_xyz[2]],
+                mode='lines', line=dict(color=current_color, width=line_width),
+                name=None, hoverinfo='text', showlegend=(index == 0),
+                text=element_hover_text + moment_text
             ))
             
+            # --- Bending Moment Diagram Markers ---
+            if display_mode == 'Bending Moment':
+                # Plot markers at start and end nodes, sized by moment magnitude
+                for node_id, M_val in [(elem['start'], elem['M_start']), (elem['end'], elem['M_end'])]:
+                    if abs(M_val) > 1e-3:
+                        coord = node_coords_plot[node_id]
+                        size = 5 + abs(M_val) / max_moment * 15 # Scale marker size
+                        fig.add_trace(go.Scatter3d(
+                            x=[coord['x_plot']], y=[coord['y_plot']], z=[coord['z_plot']],
+                            mode='markers',
+                            marker=dict(size=size, color='yellow' if M_val > 0 else 'cyan', symbol='square', opacity=1.0),
+                            name=None,
+                            showlegend=False,
+                            hoverinfo='text',
+                            text=f"Node {node_id}<br>Moment Mz': {M_val:.2f} kNm"
+                        ))
+
+            # --- Load Distribution Visualization (UDL Arrows) ---
+            if display_mode == 'Load Distribution' and 'beam' in elem_type and elem['UDL_Total'] > 0:
+                mid_x = (p1_xyz[0] + p2_xyz[0]) / 2.0
+                mid_y = (p1_xyz[1] + p2_xyz[1]) / 2.0
+                mid_z = (p1_xyz[2] + p2_xyz[2]) / 2.0
+                
+                # UDL is gravity (in -Y direction)
+                load_magnitude = elem['UDL_Total'] * elem.get('L', 1.0) # Total UDL force
+                arrow_size = np.clip(load_magnitude * 0.05, 0.5, 3) # Scale arrow size
+                
+                # Plot an arrow (cone) or simply a vector/marker at midspan
+                fig.add_trace(go.Cone(
+                    x=[mid_x], y=[mid_y + arrow_size], z=[mid_z],
+                    u=[0], v=[-1], w=[0], # Vector points straight down
+                    sizemode="absolute", sizeref=arrow_size * 2, anchor="tip",
+                    colorscale=[[0, 'purple'], [1, 'purple']],
+                    name=None, showlegend=False,
+                    hoverinfo='text',
+                    text=f"UDL: {elem['UDL_Total']:.2f} kN/m"
+                ))
+
     # 3. Layout Configuration 
     max_x = nodes_df['x'].max() if not nodes_df.empty else 10
     max_y = nodes_df['y'].max() if not nodes_df.empty else 10
     max_z = nodes_df['z'].max() if not nodes_df.empty else 10
     min_y = nodes_df['y'].min() if not nodes_df.empty else 0
     
-    plot_limit_x = max_x * 1.1 
-    plot_limit_z = max_z * 1.1 
-    plot_limit_y_top = max_y * 1.1
-    plot_limit_y_bottom = min_y * 1.1 
+    plot_limit_x = max_x * 1.1; plot_limit_z = max_z * 1.1 
+    plot_limit_y_top = max_y * 1.1; plot_limit_y_bottom = min_y * 1.1 
     
     fig.update_layout(
-        title=f'Interactive 3D Frame Geometry (FEA Displacement $\\times{scale_factor}$)',
+        title=f'Interactive 3D Frame - {display_mode}',
         scene=dict(
             xaxis=dict(title='X (Length)', showgrid=True, zeroline=True, range=[0, plot_limit_x]),
             yaxis=dict(title='Y (Height)', showgrid=True, zeroline=True, range=[plot_limit_y_bottom, plot_limit_y_top]),
@@ -647,11 +529,11 @@ def plot_3d_frame(nodes_df, elements, node_coords, display_mode):
     return fig
 
 
-# --- 7. Streamlit App Layout and Logic ---
+# --- 5. Streamlit App Layout and Logic ---
 
 # Sidebar for User Inputs
 st.sidebar.header("📐 Define Grid Geometry")
-st.sidebar.markdown("Use format: `L1, N2xL2, ...` (e.g., `5, 2x4.5`). Units are assumed (e.g., meters).")
+st.sidebar.markdown("Use format: `L1, N2xL2, ...` (e.g., `5, 2x4.5`). Units are meters.")
 
 # Grid Inputs 
 default_x = "3x5, 2x4"
@@ -661,151 +543,108 @@ y_input = st.sidebar.text_input("Y Direction Heights (Floor)", default_y)
 default_z = "4x6"
 z_input = st.sidebar.text_input("Z Direction Bays (Width)", default_z)
 default_foundation = 3.0
-foundation_depth = st.sidebar.number_input(
-    "Foundation Depth below Ground (m)", 
-    min_value=0.0, 
-    value=default_foundation, 
-    step=0.5
-)
+foundation_depth = st.sidebar.number_input("Foundation Depth below Ground (m)", min_value=0.0, value=default_foundation, step=0.5)
 
 st.sidebar.markdown("---")
 st.sidebar.header("🔩 Material & Section Properties (RC)")
 
-# Material Property
-concrete_density = 25.0 # Fixed for calculation
 E_val = st.sidebar.number_input("Young's Modulus E (kN/m²)", value=2.5e7, format="%e", help="E for M25 concrete is ~2.5e7 kN/m²")
-
 st.sidebar.subheader("Column Dimensions ($b \\times h$, mm)")
-col_b = st.sidebar.number_input("Column Width b (mm)", value=300, min_value=100)
-col_h = st.sidebar.number_input("Column Depth h (mm)", value=600, min_value=100)
-
+col_b = st.sidebar.number_input("Column Width b (mm)", value=300, min_value=100); col_h = st.sidebar.number_input("Column Depth h (mm)", value=600, min_value=100)
 st.sidebar.subheader("Beam Dimensions ($b \\times h$, mm)")
-beam_b = st.sidebar.number_input("Beam Width b (mm)", value=230, min_value=100)
-beam_h = st.sidebar.number_input("Beam Depth h (mm)", value=450, min_value=100)
+beam_b = st.sidebar.number_input("Beam Width b (mm)", value=230, min_value=100); beam_h = st.sidebar.number_input("Beam Depth h (mm)", value=450, min_value=100)
 
-# Calculate derived properties
 prop_column = calculate_rc_properties(col_b, col_h, E_val)
 prop_beam = calculate_rc_properties(beam_b, beam_h, E_val)
-G_val = prop_column['G'] 
-
-st.sidebar.markdown(f"**Derived Shear Modulus G:** $ {G_val:.2e} \\frac{{kN}}{{m^2}} $")
 
 st.sidebar.markdown("---")
 st.sidebar.header("⚖️ Gravity Load Inputs")
 
 load_params = {}
 load_params['slab_thickness'] = st.sidebar.number_input("Slab Thickness $t$ (m)", min_value=0.0, value=0.15, step=0.01)
-load_params['slab_density'] = st.sidebar.number_input("Concrete Density $\\gamma$ (kN/m³)", min_value=1.0, value=concrete_density, step=1.0)
+load_params['slab_density'] = st.sidebar.number_input("Concrete Density $\\gamma$ (kN/m³)", min_value=1.0, value=25.0, step=1.0)
 load_params['finish_load'] = st.sidebar.number_input("Floor Finish Load (kN/m²)", min_value=0.0, value=1.5, step=0.1)
 load_params['live_load'] = st.sidebar.number_input("Live Load (kN/m²)", min_value=0.0, value=3.0, step=0.5)
 
 st.sidebar.markdown("---")
 
-# Mandatory button to trigger analysis (Moved up to ensure visibility)
+# Mandatory button to trigger analysis 
 if st.sidebar.button("Run Analysis & Visualize 🚀"):
     st.session_state['run_generation'] = True
 
 st.sidebar.header("📊 Visualization Mode")
 display_mode = st.sidebar.selectbox(
     "Select Result to Display",
-    ['Deflection', 'Geometry/Supports', 'Bending Moment', 'Shear Force']
+    ['Deflection', 'Geometry/Supports', 'Load Distribution', 'Bending Moment']
 )
 
-# Initialize state on first run
-if 'run_generation' not in st.session_state:
-    st.session_state['run_generation'] = False 
-if 'nodes_df' not in st.session_state:
-    st.session_state['nodes_df'] = None
-if 'elements' not in st.session_state:
-    st.session_state['elements'] = None
-if 'node_coords' not in st.session_state:
-    st.session_state['node_coords'] = None
+# Initialize state
+if 'run_generation' not in st.session_state: st.session_state['run_generation'] = False 
+if 'nodes_df' not in st.session_state: st.session_state['nodes_df'] = None
+if 'elements' not in st.session_state: st.session_state['elements'] = None
+if 'node_coords' not in st.session_state: st.session_state['node_coords'] = None
 
 # Main Page Content
-st.title("3D Frame Analysis: Gravity Load and Realistic Sizing")
+st.title("3D Frame Analysis: Load and Moment Visualization")
 st.markdown(r"""
-The structural geometry is defined by the grid, and **member thickness in the visualization is now proportional to the input $\boldsymbol{h}$ (depth) of the beam/column** for a more realistic display.
-The **Gravity Load Vector** $\mathbf{P}$ is calculated based on:
-1.  **Slab Dead Load:** (Slab Thickness $\times$ Concrete Density) + Floor Finish Load (Distributed to beams via tributary area).
-2.  **Live Load:** Distributed to beams via tributary area.
-3.  **Self-Weight:** Column self-weight applied axially; Beam self-weight applied as UDL.
+The structural solver now calculates **Element End Moments** based on solved displacements ($\mathbf{U}$) and applied fixed-end forces (gravity load). 
 
-The system $\mathbf{K}\mathbf{U} = \mathbf{P}$ is solved for the displacement vector $\mathbf{U}$.
+* **Deflection:** Shows the deformed structure (magnified).
+* **Load Distribution:** Shows the UDL (Uniformly Distributed Load) arrows applied to the beams.
+* **Bending Moment:** Shows the element lines colored/sized by the maximum moment, with yellow/cyan markers indicating moments at the nodes.
 """)
 
-# --- 8. Main Logic Block ---
+# --- 6. Main Logic Block ---
 if st.session_state.get('run_generation'):
     
-    # 1. Parse Inputs
     x_lengths = parse_grid_input(x_input)
     y_heights = parse_grid_input(y_input)
     z_lengths = parse_grid_input(z_input)
     
-    # 2. Validate & Generate Geometry
     if not x_lengths or not y_heights or not z_lengths:
         st.error("Please ensure all three dimensions (X, Y, Z) have valid, positive length inputs.")
-        st.session_state['run_generation'] = False
     else:
-        with st.spinner('Generating 3D geometry and assigning properties...'):
+        with st.spinner('Generating 3D geometry...'):
             nodes_df, elements, node_coords = generate_grid_geometry(
                 x_lengths, y_heights, z_lengths, foundation_depth, prop_column, prop_beam
             )
-            st.session_state['nodes_df'] = nodes_df
-            st.session_state['elements'] = elements
-            st.session_state['node_coords'] = node_coords
         
-        # 3. Perform Full FEA Setup and Solve
-        with st.spinner('Calculating K and P matrices, and solving for U...'):
+        with st.spinner('Performing FEA (Stiffness, Load, Solve, Forces)...'):
             nodes_df_solved, elements_solved = perform_analysis(nodes_df, elements, load_params, node_coords)
             st.session_state['nodes_df'] = nodes_df_solved
             st.session_state['elements'] = elements_solved
+            st.session_state['node_coords'] = node_coords
         
-    # Reset run trigger
     st.session_state['run_generation'] = False
 
-# --- 9. Display Visualization if data exists ---
+# --- 7. Display Visualization ---
 if st.session_state['nodes_df'] is not None:
     frame_fig = plot_3d_frame(
         st.session_state['nodes_df'], 
         st.session_state['elements'], 
-        st.session_state['node_coords'], 
         display_mode
     )
     st.plotly_chart(frame_fig, use_container_width=True)
 
-    # Display Summary Data
-    st.subheader("FEA System Details")
+    st.subheader("FEA Results Summary")
+    
+    # Calculate overall gravity load for display
+    q_total_gravity = (load_params['slab_density'] * load_params['slab_thickness'] + 
+                       load_params['finish_load'] + load_params['live_load'])
+    
+    max_abs_moment = max(abs(elem.get('M_start', 0)) for elem in st.session_state['elements'])
+    
     col1, col2, col3 = st.columns(3)
     with col1:
         st.markdown(f"**Total Nodes:** `{len(st.session_state['nodes_df'])}`")
         st.markdown(f"**Total Elements:** `{len(st.session_state['elements'])}`")
     with col2:
-        st.markdown(f"**Global Matrix Size (K):** `{st.session_state['K_global'].shape if 'K_global' in st.session_state else 'N/A'}`")
+        st.markdown(f"**Global Floor Pressure:** $ {q_total_gravity:.2f} \\frac{{kN}}{{m^2}} $")
+        if 'K_global' in st.session_state:
+            st.markdown(f"**Global K Size:** `{st.session_state['K_global'].shape}`")
     with col3:
-        st.markdown(f"**E:** $ {E_val:.2e} \\frac{{kN}}{{m^2}} $")
-        
-    st.subheader("Section Property Details")
-    
-    col_prop = pd.DataFrame([prop_column]).drop(columns=['E', 'G']).T.rename(index={'b_m': 'Width $b$ (m)', 'h_m': 'Depth $h$ (m)'}).rename(columns={0: 'Value'})
-    beam_prop = pd.DataFrame([prop_beam]).drop(columns=['E', 'G']).T.rename(index={'b_m': 'Width $b$ (m)', 'h_m': 'Depth $h$ (m)'}).rename(columns={0: 'Value'})
-
-    col1_prop, col2_prop = st.columns(2)
-    with col1_prop:
-        st.markdown("**Column Properties**")
-        st.dataframe(col_prop, use_container_width=True)
-    with col2_prop:
-        st.markdown("**Beam Properties**")
-        st.dataframe(beam_prop, use_container_width=True)
-    
-    st.markdown("---")
-    st.subheader("Maximum Deflection Summary")
-    
-    # Recalculate max deflection robustly for display, in case the previous calculation was zero
-    max_y_deflection = 0.0
-    if st.session_state['nodes_df'] is not None and not st.session_state['nodes_df'].empty:
-        # Use the 'u' column from the solved DataFrame and check type
+        st.metric("Max Absolute Moment", f"{max_abs_moment:.2f} kNm")
         max_y_deflection = st.session_state['nodes_df']['u'].apply(
             lambda x: x[1] if isinstance(x, np.ndarray) and len(x) > 1 and np.isfinite(x[1]) else 0
         ).abs().max() * 1000
-
-    st.metric("Max Vertical Displacement (V) in mm", f"{max_y_deflection:.4f}")
+        st.metric("Max Vertical Displacement", f"{max_y_deflection:.2f} mm")
