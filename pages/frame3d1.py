@@ -86,6 +86,7 @@ def generate_structure(x_spacings, y_spacings, z_heights):
                     node.is_support = True
                 
                 nodes.append(node)
+                # Store node map using a tuple (x, y, z) coordinates for easy lookup
                 node_map[(x, y, z)] = node
                 node_id_counter += 1
 
@@ -140,7 +141,6 @@ def generate_structure(x_spacings, y_spacings, z_heights):
 
 def perform_analysis(nodes, elements):
     """Mocks the structural analysis and generates sample forces/reactions."""
-    # This function is heavily mocked to satisfy the visualization requirements
     
     # 1. Mock Reactions
     for node in nodes:
@@ -171,10 +171,12 @@ def perform_analysis(nodes, elements):
                 moment_mag = (wz * L**2) / 12.0
                 shear_mag = (wz * L) / 2.0
                 
+                # Note: Sign conventions for internal forces are critical and complex. 
+                # These signs are chosen for visual representation of typical force diagrams.
                 element.forces_start[1] = -shear_mag # Shear 2 start
                 element.forces_end[1] = shear_mag    # Shear 2 end
                 element.forces_start[5] = moment_mag # M3 start (hogging, positive sign convention)
-                element.forces_end[5] = -moment_mag  # M3 end (sagging/hogging)
+                element.forces_end[5] = -moment_mag  # M3 end
             
             element.forces_start[0] = 5.0 # Small mock tension
             element.forces_end[0] = 5.0
@@ -190,8 +192,12 @@ def plot_3d_frame(nodes, elements, show_nodes, show_elements, show_loads):
 
     # 1. Elements (Beams and Columns)
     if show_elements:
-        x_elem, y_elem, z_elem = [], [], []
         
+        # Determine unique coordinates for setting axis ticks
+        all_x = sorted(list(set(n.x for n in nodes)))
+        all_y = sorted(list(set(n.y for n in nodes)))
+        all_z = sorted(list(set(n.z for n in nodes)))
+
         # Color elements based on presence of UDL
         udl_x_elem, udl_y_elem, udl_z_elem = [], [], []
         regular_x_elem, regular_y_elem, regular_z_elem = [], [], []
@@ -250,25 +256,27 @@ def plot_3d_frame(nodes, elements, show_nodes, show_elements, show_loads):
             hoverinfo='text'
         ))
 
-    # 3. Applied Loads (New Feature)
+    # 3. Applied Loads 
     if show_loads:
+        load_scale = 0.05 # Visualization scale factor for cone size
+        
         for node in nodes:
             fx, fy, fz = node.applied_loads[:3]
             
             # Only plot if a force is non-zero
             if abs(fx) > 0.001 or abs(fy) > 0.001 or abs(fz) > 0.001:
-                # Use small vectors (quiver plot approach)
-                scale = 0.5 # Visualization scale factor
                 
                 # Plotting Fx load (red)
                 if abs(fx) > 0.001:
                     data.append(go.Cone(
                         x=[node.x], y=[node.y], z=[node.z],
                         u=[fx], v=[0], w=[0],
-                        sizemode='absolute', sizeref=abs(fx) * scale,
+                        sizemode='absolute', sizeref=abs(fx) * load_scale,
                         showscale=False, anchor='tip',
                         colorscale=[[0, 'red'], [1, 'red']],
-                        name=f'Fx @ {node.id}: {fx:.1f} kN'
+                        name=f'Fx @ {node.id}: {fx:.1f} kN',
+                        hovertext=[f'Fx: {fx:.1f} kN @ N{node.id}'],
+                        hoverinfo='text'
                     ))
                 
                 # Plotting Fy load (green)
@@ -276,10 +284,12 @@ def plot_3d_frame(nodes, elements, show_nodes, show_elements, show_loads):
                     data.append(go.Cone(
                         x=[node.x], y=[node.y], z=[node.z],
                         u=[0], v=[fy], w=[0],
-                        sizemode='absolute', sizeref=abs(fy) * scale,
+                        sizemode='absolute', sizeref=abs(fy) * load_scale,
                         showscale=False, anchor='tip',
                         colorscale=[[0, 'green'], [1, 'green']],
-                        name=f'Fy @ {node.id}: {fy:.1f} kN'
+                        name=f'Fy @ {node.id}: {fy:.1f} kN',
+                        hovertext=[f'Fy: {fy:.1f} kN @ N{node.id}'],
+                        hoverinfo='text'
                     ))
 
                 # Plotting Fz load (purple)
@@ -287,21 +297,25 @@ def plot_3d_frame(nodes, elements, show_nodes, show_elements, show_loads):
                     data.append(go.Cone(
                         x=[node.x], y=[node.y], z=[node.z],
                         u=[0], v=[0], w=[fz],
-                        sizemode='absolute', sizeref=abs(fz) * scale,
+                        sizemode='absolute', sizeref=abs(fz) * load_scale,
                         showscale=False, anchor='tip',
                         colorscale=[[0, 'purple'], [1, 'purple']],
-                        name=f'Fz @ {node.id}: {fz:.1f} kN'
+                        name=f'Fz @ {node.id}: {fz:.1f} kN',
+                        hovertext=[f'Fz: {fz:.1f} kN @ N{node.id}'],
+                        hoverinfo='text'
                     ))
 
 
     # 4. Layout configuration
-    max_range = max(max(x_coords), max(y_coords), max(z_coords)) - min(min(x_coords), min(y_coords), min(z_coords))
-    
+    all_x = sorted(list(set(n.x for n in nodes)))
+    all_y = sorted(list(set(n.y for n in nodes)))
+    all_z = sorted(list(set(n.z for n in nodes)))
+
     layout = go.Layout(
         scene=dict(
-            xaxis=dict(title='X (m)', showgrid=True, zeroline=True, tickvals=x_coords),
-            yaxis=dict(title='Y (m)', showgrid=True, zeroline=True, tickvals=y_coords),
-            zaxis=dict(title='Z (m)', showgrid=True, zeroline=True, tickvals=z_coords),
+            xaxis=dict(title='X (m)', showgrid=True, zeroline=True, tickvals=all_x),
+            yaxis=dict(title='Y (m)', showgrid=True, zeroline=True, tickvals=all_y),
+            zaxis=dict(title='Z (m)', showgrid=True, zeroline=True, tickvals=all_z),
             aspectmode='data', # Ensures true scale
             aspectratio=dict(x=1, y=1, z=1)
         ),
@@ -320,16 +334,17 @@ def plot_2d_frame(nodes, elements, fixed_axis, fixed_coord):
     Fixed_axis must be 'X' or 'Y'.
     """
     
-    # Filter nodes and elements that lie on the selected plane
-    plane_nodes = [n for n in nodes if n[fixed_axis.lower()] == fixed_coord]
+    # Filter nodes that lie on the selected plane
+    plane_nodes = [n for n in nodes if getattr(n, fixed_axis.lower()) == fixed_coord]
     plane_node_ids = {n.id for n in plane_nodes}
     
     plane_elements = []
     for elem in elements:
+        # Check if both start and end nodes are in the plane
         if elem.start_node.id in plane_node_ids and elem.end_node.id in plane_node_ids:
             # Only include elements that are completely within the plane
-            is_valid_element = (elem.start_node[fixed_axis.lower()] == fixed_coord and 
-                                elem.end_node[fixed_axis.lower()] == fixed_coord)
+            is_valid_element = (getattr(elem.start_node, fixed_axis.lower()) == fixed_coord and 
+                                getattr(elem.end_node, fixed_axis.lower()) == fixed_coord)
             if is_valid_element:
                 plane_elements.append(elem)
 
@@ -346,18 +361,19 @@ def plot_2d_frame(nodes, elements, fixed_axis, fixed_coord):
     data = []
 
     # 1. Elements
-    x_elem, y_elem = [], []
     for elem in plane_elements:
         p0, q0 = getattr(elem.start_node, p_axis), getattr(elem.start_node, q_axis)
         p1, q1 = getattr(elem.end_node, p_axis), getattr(elem.end_node, q_axis)
         
         # Color based on UDL
         line_color = 'red' if any(abs(l) > 0.001 for l in elem.udl) else 'gray'
+        line_name = "Element w/ UDL" if line_color == 'red' else "Element"
 
         data.append(go.Scatter(
             x=[p0, p1], y=[q0, q1],
             mode='lines',
             line=dict(color=line_color, width=4),
+            name=line_name,
             showlegend=False,
             hoverinfo='none'
         ))
@@ -401,7 +417,7 @@ def plot_2d_frame(nodes, elements, fixed_axis, fixed_coord):
                     mode='lines+markers',
                     marker=dict(symbol='arrow', size=10, angleref='next', color='red'),
                     line=dict(width=2, color='red'),
-                    name=f'F_p @ {node.id}: {f_p:.1f}',
+                    name=f'F_{p_axis.upper()}',
                     showlegend=False,
                     hoverinfo='text',
                     text=[None, f"F_{p_axis.upper()}={f_p:.1f}kN"]
@@ -414,7 +430,7 @@ def plot_2d_frame(nodes, elements, fixed_axis, fixed_coord):
                     mode='lines+markers',
                     marker=dict(symbol='arrow', size=10, angleref='next', color='purple'),
                     line=dict(width=2, color='purple'),
-                    name=f'F_q @ {node.id}: {f_q:.1f}',
+                    name=f'F_{q_axis.upper()}',
                     showlegend=False,
                     hoverinfo='text',
                     text=[None, f"F_{q_axis.upper()}={f_q:.1f}kN"]
@@ -436,7 +452,6 @@ def plot_element_forces(element):
     """Generates Plotly plots for Axial Force, Shear Force (V2), and Bending Moment (M3)."""
     L = element.length()
     if L == 0:
-        st.warning(f"Element {element.id} has zero length.")
         return go.Figure()
 
     # Get end forces
@@ -444,38 +459,29 @@ def plot_element_forces(element):
     A1, V21, V31, T1, M21, M31 = element.forces_start
     A2, V22, V32, T2, M22, M32 = element.forces_end
     
-    # Get UDL in element's local coordinate system (MOCK: just use global Z for simplicity)
+    # Get UDL in global Z direction (MOCK for simple diagrams)
     wz = element.udl[2]
-    # For a beam element in a 2D plane (local 1-2 plane), only w2 (local y) is relevant for V2/M3
-    # MOCK: Let's assume the element is horizontal and wz acts as w2 (vertical load)
-    w2 = -wz 
+    w2 = -wz # Assuming vertical load acts as local Shear2 component
     
     # Span points (normalized from 0 to 1)
     s_norm = np.linspace(0, 1, 100)
     s = s_norm * L
 
-    # Calculate force diagrams based on simple beam theory (MOCK)
-    # 1. Axial Force (Assumed constant)
+    # Calculate force diagrams based on simple beam theory (MOCK: Uniform Load + End Forces)
+    
+    # 1. Axial Force (Assumed constant for this mock)
     axial_force = np.full_like(s, A1)
 
-    # 2. Shear Force V2 (V(x) = V1 + w*x)
+    # 2. Shear Force V2 
+    # Shear(x) = V_start + w * x
     shear_force_v2 = V21 + w2 * s
     
-    # 3. Bending Moment M3 (M(x) = M1 + V1*x + w*x^2/2)
+    # 3. Bending Moment M3 
+    # Moment(x) = M_start - V_start * x + (w * x^2) / 2
     bending_moment_m3 = M31 - V21 * s + (w2 * s**2) / 2.0
     
     
-    # --- Create Subplots for the three diagrams ---
-    
-    fig = go.Figure()
-    
-    # 1. Axial Force Plot
-    fig.add_trace(go.Scatter(x=s, y=axial_force, mode='lines', name='Axial Force (A)', line=dict(color='blue')),)
-
-    # 2. Shear Force V2 Plot
-    # Add a subplot below the axial plot. Plotly doesn't use subplots directly in this context, 
-    # so we'll stack them using annotations and layout or rely on Streamlit's display area.
-    # For simplicity, we'll generate three separate figures.
+    # --- Create Separate Figures for each diagram ---
     
     fig_a = go.Figure(
         data=[go.Scatter(x=s, y=axial_force, mode='lines', line=dict(color='blue', width=3), fill='tozeroy')],
@@ -497,9 +503,6 @@ def plot_element_forces(element):
         )
     )
     
-    # Note on Moment sign: Structural engineers often plot moment on the tension side. 
-    # Plotly plots positive up. If we follow the sign convention of positive for compression on side 2 (top)
-    # then M3 has the signs shown. I'll plot the magnitude for better visibility.
     fig_m = go.Figure(
         data=[go.Scatter(x=s, y=bending_moment_m3, mode='lines', line=dict(color='green', width=3), fill='tozeroy')],
         layout=go.Layout(
@@ -515,8 +518,8 @@ def plot_element_forces(element):
 
 # --- 4. Streamlit App Layout ---
 
-# Initialize Structure (using the new hardcoded geometry)
-@st.cache_data
+# FIX: Use st.cache_resource for custom class objects like Node and Element
+@st.cache_resource
 def load_data():
     nodes, elements = generate_structure(X_SPACINGS, Y_SPACINGS, Z_HEIGHTS)
     # Run mock analysis
@@ -531,7 +534,7 @@ st.markdown(f"""
     **Generated Geometry:**
     - **X-Bays:** {X_SPACINGS} m (Total: {sum(X_SPACINGS)}m)
     - **Y-Bays:** {Y_SPACINGS} m (Total: {sum(Y_SPACINGS)}m)
-    - **Z-Levels:** {Z_HEIGHTS} m (Basement: {Z_HEIGHTS[0]}m, Top Floor: {Z_HEIGHTS[-1]}m)
+    - **Z-Levels:** Basement: {Z_HEIGHTS[0]}m, Floors at: {Z_HEIGHTS[1:]} m
 """)
 st.info(f"Total Nodes: **{len(nodes)}** | Total Elements: **{len(elements)}**")
 st.markdown("---")
@@ -543,10 +546,9 @@ with st.container():
     with col1:
         show_nodes = st.toggle("Show Nodes", value=True)
     with col2:
-        show_elements = st.toggle("Show Elements", value=True)
+        show_elements = st.toggle("Show Elements (Red = w/ UDL)", value=True)
     with col3:
-        # Load toggle for 3D plot
-        show_loads_3d = st.toggle("Show Applied Loads", value=True)
+        show_loads_3d = st.toggle("Show Applied Nodal Loads", value=True)
 st.markdown("---")
 
 # --- 3D Visualization ---
@@ -565,10 +567,12 @@ with tab1:
     plane_axis = st.radio("Select Grid Plane Axis", ('X-Z (Y-Gridline)', 'Y-Z (X-Gridline)'))
     
     if plane_axis == 'X-Z (Y-Gridline)':
+        # View looking along the Y-axis at a specific Y coordinate
         y_coords = sorted(list(set(n.y for n in nodes)))
         selected_y = st.selectbox("Select Y-grid", options=y_coords, format_func=lambda x: f"Y = {x:.1f} m", key='y_coord')
         st.plotly_chart(plot_2d_frame(nodes, elements, 'Y', selected_y), use_container_width=True)
     else:
+        # View looking along the X-axis at a specific X coordinate
         x_coords = sorted(list(set(n.x for n in nodes)))
         selected_x = st.selectbox("Select X-grid", options=x_coords, format_func=lambda x: f"X = {x:.1f} m", key='x_coord')
         st.plotly_chart(plot_2d_frame(nodes, elements, 'X', selected_x), use_container_width=True)
@@ -590,9 +594,9 @@ with tab2:
     else:
         st.info("No fixed support nodes found in the structure.")
 
-# --- Tab 3: Detailed Element Results (NEW FEATURE: Element Forces) ---
+# --- Tab 3: Detailed Element Results (Element Forces) ---
 with tab3:
-    st.subheader("Element Force Diagrams")
+    st.subheader("Element Force Diagrams (Axial, Shear V2, Moment M3)")
     
     element_options = {e.id: e for e in elements}
     selected_elem_id = st.selectbox(
@@ -606,7 +610,7 @@ with tab3:
         
         st.markdown(f"#### Forces for Element **{selected_elem_id}** (Length: {selected_element.length():.2f}m)")
         
-        # Display End Forces
+        # Display End Forces Table
         forces_df = pd.DataFrame({
             "Force/Moment": ["Axial (A)", "Shear V2", "Shear V3", "Torque (T)", "Moment M2", "Moment M3"],
             "Start Node Force": [f"{f:.2f}" for f in selected_element.forces_start],
@@ -617,7 +621,6 @@ with tab3:
         # Generate and display force diagrams
         fig_a, fig_v, fig_m = plot_element_forces(selected_element)
         
-        # Display the plots for Axial, Shear, and Moment
         st.plotly_chart(fig_a, use_container_width=True)
         st.plotly_chart(fig_v, use_container_width=True)
         st.plotly_chart(fig_m, use_container_width=True)
