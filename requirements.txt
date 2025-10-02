@@ -1,0 +1,12 @@
+streamlit
+pandas
+numpy
+matplotlib
+XlsxWriter
+openpyxl
+reportlab
+simplekml
+shapely
+fpdf2
+plotly
+ezdxf
