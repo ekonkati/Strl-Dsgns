@@ -126,27 +126,69 @@ def generate_grid_geometry(x_lengths, y_heights, z_lengths, foundation_depth):
 
     return nodes_df, elements, node_coords
 
-# --- 2. Load and Analysis Placeholders ---
+# --- 2. FEA Setup and Analysis Functions (Non-Mock Steps) ---
 
-def calculate_loads(nodes_df, elements, load_params):
-    """
-    Placeholder function for calculating Dead, Live, Wind, and Seismic loads
-    and applying them to the nodes and elements. This would involve:
-    1. Calculating slab area/self-weight (Dead Load).
-    2. Calculating tributary area to distribute slab load to beams.
-    3. Applying specified Live Load.
-    4. Calculating Wind/Seismic forces (requires shape, elevation, site data - highly complex).
+def map_degrees_of_freedom(nodes_df):
+    """Assigns global degrees of freedom (DOF) indices to each node (6 DOF per node in 3D: Ux, Uy, Uz, Rx, Ry, Rz)."""
+    dof_per_node = 6
+    total_dofs = len(nodes_df) * dof_per_node
     
-    For now, this function only updates placeholders for visualization.
-    """
-    st.info("Load calculation, structural analysis, and code checking (IS 456/875) are highly complex and simulated here. A specialized FEA library is required for real analysis.")
+    # Assign global DOF index range to each node (starting at 0)
+    nodes_df['dof_start_index'] = nodes_df.index * dof_per_node
     
-    # Mock Analysis: Apply random BM/SF for visualization demo
-    # In a real app, this would be the 3D Stiffness Matrix solver
+    # Store total DOFs in the DataFrame metadata for easy access
+    nodes_df.attrs['total_dofs'] = total_dofs
+    
+    st.markdown(f"**Total Global Degrees of Freedom (DoF):** `{total_dofs}`")
+    return nodes_df
+
+def calculate_element_stiffness(element, node_coords):
+    """
+    Placeholder for calculating the 12x12 element stiffness matrix [k] in global coordinates for a 3D element.
+    This requires material (E, G) and section properties (A, I, J).
+    """
+    # In a real implementation: [k] = [T]^T * [k_local] * [T]
+    # For now, return a zero matrix as a placeholder.
+    return np.zeros((12, 12)) 
+
+def assemble_global_stiffness(nodes_df, elements, node_coords):
+    """
+    Placeholder for assembling the Global Stiffness Matrix [K] by placing 
+    each element's stiffness matrix into the correct global DoF locations.
+    """
+    total_dofs = nodes_df.attrs.get('total_dofs', 0)
+    
+    # Initialize the global stiffness matrix (usually a sparse matrix in large FEA)
+    K_global = np.zeros((total_dofs, total_dofs))
+    
+    # In a real app, you would loop through elements, calculate [k], 
+    # and use the DOF map to place the 12x12 matrix into K_global.
+    
+    return K_global
+
+def perform_analysis(nodes_df, elements, load_params, node_coords):
+    """
+    Expands the structural analysis process to include FEA setup and mocked results.
+    """
+    st.info("Initiating 3D Finite Element Analysis (FEA) Setup...")
+    
+    # 1. Map Degrees of Freedom (DOF)
+    nodes_df = map_degrees_of_freedom(nodes_df)
+    
+    # 2. Calculate Element Stiffness Matrices (k)
+    # The actual calculation for a single element is mocked here for size reference.
+    stiffness_matrix_placeholder = calculate_element_stiffness(elements[0], node_coords)
+    st.markdown(f"**Element Stiffness Matrix Size:** `{stiffness_matrix_placeholder.shape}` (12x12 for 3D element)")
+
+    # 3. Assemble Global Stiffness Matrix (K)
+    K_global = assemble_global_stiffness(nodes_df, elements, node_coords)
+    st.markdown(f"**Global Stiffness Matrix Size (K):** `{K_global.shape}` (Total DoF x Total DoF)")
+
+    # --- FEA Solver Steps (Currently Mocked) ---
+    st.warning("The solver steps (Load Vector [P], Applying Boundary Conditions, Solving for Displacements [U], and Calculating Internal Forces) are complex and still require implementation. Falling back to Mock Analysis results for visualization.")
     
     # Mocking deflection and moment results on elements
     for elem in elements:
-        # Simple mocking based on element type
         if 'beam' in elem['type']:
             # Mock parabolic moment for beams
             elem['BM'] = np.random.uniform(100, 300) 
@@ -159,8 +201,8 @@ def calculate_loads(nodes_df, elements, load_params):
     # Mocking node deflection (e.g., larger deflection at the top)
     max_y = nodes_df['y'].max()
     if max_y > 0:
-        nodes_df['deflection_scale'] = nodes_df['y'] / max_y # Scale deflection by height
-        nodes_df['deflection_magnitude'] = nodes_df['deflection_scale'] * 0.5 # Mock max deflection of 0.5m
+        nodes_df['deflection_scale'] = nodes_df['y'] / max_y
+        nodes_df['deflection_magnitude'] = nodes_df['deflection_scale'] * 0.5 
     
     return nodes_df, elements
 
@@ -369,9 +411,9 @@ if st.session_state.get('run_generation'):
         with st.spinner('Generating 3D geometry and supports...'):
             nodes_df, elements, node_coords = generate_grid_geometry(x_lengths, y_heights, z_lengths, foundation_depth)
         
-        # 4. Mock Analysis
-        with st.spinner('Calculating loads and performing mock structural analysis...'):
-            nodes_df, elements = calculate_loads(nodes_df, elements, load_params)
+        # 4. Analysis Setup & Mock Results
+        with st.spinner('Setting up FEA matrices and performing mock structural analysis...'):
+            nodes_df, elements = perform_analysis(nodes_df, elements, load_params, node_coords)
         
         st.success(f"Generated successfully: {len(nodes_df)} nodes and {len(elements)} elements. Fixed supports are applied at Y={-foundation_depth:.2f}m.")
 
@@ -402,7 +444,7 @@ if st.session_state.get('run_generation'):
         )
         
         st.subheader("Node Coordinates (First 10)")
-        st.dataframe(nodes_df[['id', 'x', 'y', 'z', 'support_type']].head(10))
+        st.dataframe(nodes_df[['id', 'x', 'y', 'z', 'support_type', 'dof_start_index']].head(10))
 
         # Reset flag
         st.session_state['run_generation'] = False
