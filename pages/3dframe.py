@@ -416,7 +416,6 @@ def solve_fea_system(nodes_df, K_global, P_global):
     temp_nodes_df = nodes_df.copy() # Work on a copy to apply results back
     
     # FIX: Explicitly ensure the 'u' column is of object dtype to reliably store numpy arrays.
-    # This addresses the ValueError when assigning an array to a single cell.
     temp_nodes_df['u'] = temp_nodes_df['u'].astype(object) 
     
     for index, row in temp_nodes_df.iterrows():
@@ -447,10 +446,20 @@ def perform_analysis(nodes_df, elements, load_params, node_coords):
         nodes_df_solved, U_full = solve_fea_system(nodes_df, K_global, P_global) 
     
     # 5. Calculate Internal Forces (Simplified Mocking for Visualization)
-    max_deflection = np.max(np.abs(U_full[np.arange(1, len(U_full), 6)])) # Max V displacement
     
+    # FIX: Robustly calculate max_deflection, ensuring U_full is not empty before indexing.
+    max_deflection = 0.0
+    if len(U_full) > 0:
+        # Find the indices corresponding to the Y-translation (V) for every node (DOF index 1, 7, 13, ...)
+        y_indices = np.arange(1, len(U_full), 6)
+        
+        if y_indices.size > 0:
+            # We filter for the vertical displacement (index 1 of the 6 DOFs)
+            max_deflection = np.max(np.abs(U_full[y_indices])) 
+        # else: max_deflection remains 0.0
+
     if max_deflection == 0:
-        st.warning("Calculated displacement is zero. Check loads/boundary conditions.")
+        st.warning("Calculated displacement is zero. Check loads/boundary conditions or structural stability.")
         
     for index, row in nodes_df_solved.iterrows():
         # Ensure 'u' is treated as an array before using np.linalg.norm
@@ -793,5 +802,11 @@ if st.session_state['nodes_df'] is not None:
     
     st.markdown("---")
     st.subheader("Maximum Deflection Summary")
-    max_y_deflection = st.session_state['nodes_df']['u'].apply(lambda x: x[1]).abs().max() * 1000
+    
+    # Calculate max deflection robustly for display
+    max_y_deflection = 0.0
+    if st.session_state['nodes_df'] is not None and not st.session_state['nodes_df'].empty:
+        # Use the 'u' column from the solved DataFrame
+        max_y_deflection = st.session_state['nodes_df']['u'].apply(lambda x: x[1] if isinstance(x, np.ndarray) and len(x) > 1 else 0).abs().max() * 1000
+
     st.metric("Max Vertical Displacement (V) in mm", f"{max_y_deflection:.4f}")
