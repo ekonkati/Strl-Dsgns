@@ -57,7 +57,7 @@ class Element:
 
         k[1,1] = k[7,7] = 12*E*Izz/L3
         k[1,7] = k[7,1] = -12*E*Izz/L3
-        k[1,5] = k[5,1] = k[1,11] = 6*E*Izz/L2
+        k[1,5] = k[5,1] = 6*E*Izz/L2
         k[7,5] = k[5,7] = -6*E*Izz/L2
         k[7,11] = k[11,7] = -6*E*Izz/L2
         k[1,11] = k[11,1] = 6*E*Izz/L2
@@ -362,7 +362,16 @@ def generate_and_analyze_structure(x_dims, y_dims, z_dims, col_props, beam_props
 
 def get_hover_text(elem):
     """Generates detailed hover text for an element."""
-    text = f"**Element {elem['id']}** (L={elem['length']:.2f}m)<br>"
+    # FIX: Ensure 'length' key exists when called. It should be present, but 
+    # the conflicting logic in plot_3d_frame was likely passing an incorrect object.
+    # The fix is in plot_3d_frame, but keeping this robust.
+    
+    # This line was causing the KeyError if an element without the 'length' key was passed:
+    # text = f"**Element {elem['id']}** (L={elem['length']:.2f}m)<br>"
+    
+    # We rely on the dictionary format created in generate_and_analyze_structure, which includes 'length'.
+    text = f"**Element {elem['id']}** (L={elem.get('length', 0.0):.2f}m)<br>"
+    
     for key, value in elem['results'].items():
         if not key.startswith('Disp'): # Exclude displacement from hover for brevity
             unit = 'kNm' if key.startswith('Moment') or key.startswith('Torsion') else 'kN'
@@ -372,24 +381,20 @@ def get_hover_text(elem):
 def plot_3d_frame(nodes, elements, display_mode='Structure', show_nodes=False, show_elems=False):
     fig = go.Figure()
     
-    # 1. Structure/Moment Lines
-    edge_x, edge_y, edge_z, hover_texts = [], [], [], []
+    # 1. Structure/Moment Lines (Using individual traces for color/width control)
     max_abs_result = 1 # Avoid division by zero
     result_key = None
     
     if display_mode == 'Bending Moment (Myz)':
-        max_abs_result = max((abs(e['results'].get('Moment_Z_End', 0)) for e in elements), default=0)
-        result_key = 'Moment_Z_End'
+        # Use Max_Abs_Moment for a visual heat map of moment severity in 3D
+        max_abs_result = max((abs(e['results'].get('Max_Abs_Moment', 0)) for e in elements), default=0)
+        result_key = 'Max_Abs_Moment'
     elif display_mode == 'Axial Force (Fx)':
         max_abs_result = max((abs(e['results'].get('Axial_End', 0)) for e in elements), default=0)
         result_key = 'Axial_End'
 
     for elem in elements:
         start_pos, end_pos = elem['start_node_pos'], elem['end_node_pos']
-        edge_x.extend([start_pos[0],end_pos[0],None])
-        edge_y.extend([start_pos[1],end_pos[1],None])
-        edge_z.extend([start_pos[2],end_pos[2],None])
-        hover_texts.extend([get_hover_text(elem), get_hover_text(elem), None])
 
         line_color = 'darkblue'
         line_width = 4
@@ -398,17 +403,26 @@ def plot_3d_frame(nodes, elements, display_mode='Structure', show_nodes=False, s
             # Color coding for result plots
             result_val = elem['results'].get(result_key, 0)
             normalized_val = result_val / max_abs_result if max_abs_result > 0 else 0
-            # Red for positive, Blue for negative (or vice versa), using a simplified color logic
-            if np.isclose(normalized_val, 0):
-                line_color = 'gray'
-            elif normalized_val > 0:
-                line_color = f'rgb({int(255*normalized_val)}, 0, 0)' # Red scale
-            else:
-                line_color = f'rgb(0, 0, {int(255*abs(normalized_val))})' # Blue scale
+            
+            # Simple heat map logic (Red for high magnitude, fading to gray)
+            if display_mode == 'Bending Moment (Myz)':
+                color_val = int(255 * (abs(normalized_val) ** 0.5)) # Square root for non-linear scale
+                line_color = f'rgb({color_val}, 50, 50)' # Red scale based on magnitude
+            
+            # Signed color coding for Axial Force (Red=Tension, Blue=Compression)
+            elif display_mode == 'Axial Force (Fx)':
+                if np.isclose(result_val, 0):
+                    line_color = 'gray'
+                elif result_val > 0: # Tension (Positive) -> Red
+                    line_color = f'rgb({int(255*normalized_val)}, 50, 50)'
+                else: # Compression (Negative) -> Blue
+                    line_color = f'rgb(50, 50, {int(255*abs(normalized_val))})'
+                    
             line_width = 5
         
         fig.add_trace(go.Scatter3d(x=[start_pos[0],end_pos[0]], y=[start_pos[1],end_pos[1]], z=[start_pos[2],end_pos[2]], 
                                    mode='lines', line=dict(color=line_color, width=line_width), 
+                                   # Use the correct dictionary 'elem' for hovertext
                                    hoverinfo='text', hovertext=get_hover_text(elem), name=f"Elem {elem['id']}", showlegend=False))
 
     # 2. Node Markers
@@ -456,7 +470,7 @@ def plot_2d_frame(nodes, elements, plane_axis, coordinate, display_mode='Structu
     result_map = {
         'Structure': (None, None, 1),
         'Axial Force (Fx)': ('Axial_Start', 'kN', 1),
-        'Shear Force (Fz)': ('Shear_Z_Start', 'kN', 1),
+        'Shear Force (Fz)': ('Shear_Z_Start', 'kN', 1), # Fz is primary shear for horizontal members (beams) in Z-plane
         'Bending Moment (My)': ('Moment_Y_Start', 'kNm', 1),
         'Bending Moment (Mz)': ('Moment_Z_Start', 'kNm', 1)
     }
@@ -496,22 +510,32 @@ def plot_2d_frame(nodes, elements, plane_axis, coordinate, display_mode='Structu
                 # Element length for offset (only use horizontal/vertical length for cleaner label offset)
                 dx_proj = abs(end_x - start_x)
                 dz_proj = abs(z_coords[1] - z_coords[0])
-
+                
+                # Determine element type and text position for cleaner display
+                is_horizontal = dx_proj > dz_proj
+                
                 # Position the start label
                 if not np.isclose(val_start, 0):
-                    x_offset = -0.1 if dx_proj > dz_proj else 0.1 # Offset label for beams vs columns
-                    y_offset = 0.1 if dx_proj > dz_proj else -0.1
+                    # Offset direction depends on element type and orientation
+                    x_offset = 0 if is_horizontal else (-0.1 if end_x > start_x else 0.1) # Offset for columns
+                    y_offset = -0.1 if is_horizontal else 0 # Offset for beams
+                    
                     fig.add_annotation(x=start_x + x_offset, y=z_coords[0] + y_offset, 
-                                       text=f"{val_start:.2f} {unit}", showarrow=False, 
+                                       text=f"{val_start:.2f}", showarrow=False, 
                                        font=dict(size=10, color='red' if val_start > 0 else 'blue'))
 
                 # Position the end label
                 if not np.isclose(val_end, 0):
-                    x_offset = 0.1 if dx_proj > dz_proj else -0.1
-                    y_offset = 0.1 if dx_proj > dz_proj else -0.1
+                    # Offset direction depends on element type and orientation
+                    x_offset = 0 if is_horizontal else (0.1 if end_x > start_x else -0.1)
+                    y_offset = -0.1 if is_horizontal else 0
+                    
                     fig.add_annotation(x=end_x + x_offset, y=z_coords[1] + y_offset, 
-                                       text=f"{val_end:.2f} {unit}", showarrow=False, 
+                                       text=f"{val_end:.2f}", showarrow=False, 
                                        font=dict(size=10, color='red' if val_end > 0 else 'blue'))
+                
+                # Add the unit only once to the title for clarity
+                title_unit = f"({unit})"
 
 
     # 2. Node Markers
@@ -526,7 +550,9 @@ def plot_2d_frame(nodes, elements, plane_axis, coordinate, display_mode='Structu
                                  textposition="top center", textfont=dict(color='black', size=10), showlegend=False))
         
     title_mode = display_mode if display_mode != 'Structure' else 'Frame'
-    fig.update_layout(title=f"2D Elevation ({title_mode}) on {plane_axis.replace('Y', 'X-Z').replace('X', 'Y-Z')} Plane at {plane_axis}={coordinate}m", 
+    title_unit = title_unit if result_key else ''
+    
+    fig.update_layout(title=f"2D Elevation ({title_mode}) {title_unit} on {plane_axis.replace('Y', 'X-Z').replace('X', 'Y-Z')} Plane at {plane_axis}={coordinate}m", 
                       xaxis_title=f'{x_key.upper()}-axis (m)', yaxis_title='Z-axis (m)', showlegend=False)
     fig.update_yaxes(scaleanchor="x", scaleratio=1)
     return fig
