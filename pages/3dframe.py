@@ -152,10 +152,8 @@ def map_degrees_of_freedom(nodes_df):
 def calculate_element_stiffness(element, node_coords):
     """
     Calculates the 12x12 element stiffness matrix [k] in global coordinates 
-    using element-specific properties (E, G, A, Izz, Iyy, J). (Omitted for brevity, but used internally)
+    using element-specific properties (E, G, A, Izz, Iyy, J).
     """
-    # ... (calculate_element_stiffness implementation remains the same as previous response) ...
-    # This implementation is crucial for K_global assembly.
     E = element['E']
     G = element['G']
     A = element['A']
@@ -260,7 +258,7 @@ def assemble_global_stiffness(nodes_df, elements, node_coords):
             for col_elem in range(12):
                 global_row = global_dofs[row_elem]
                 global_col = global_dofs[col_elem]
-                K_global[global_row, global_col] += k_global_elem[row_elem, col_elem]
+                K_global[global_row, global_col] += k_global_elem[row_elem, col_col]
     
     return K_global
 
@@ -286,7 +284,8 @@ def calculate_gravity_loads(nodes_df, elements, load_params):
     q_total_ll = live_load
     q_total_gravity = q_slab_dl + q_total_ll # kN/m^2 (Unfactored)
 
-    st.markdown(f"**Calculated Gravity Floor Pressure (Unfactored):** ${q_total_gravity:.2f} \text{ kN}/\text{m}^2$")
+    # FIX: Escaping the backslash for the LaTeX command \text{}
+    st.markdown(f"**Calculated Gravity Floor Pressure (Unfactored):** ${q_total_gravity:.2f} \\text{ kN}/\\text{m}^2$")
 
     for elem in elements:
         P_elem = np.zeros(12)
@@ -465,6 +464,9 @@ def perform_analysis(nodes_df, elements, load_params, node_coords):
         nodes_df.loc[index, 'deflection_magnitude'] = np.linalg.norm(u_vector[0:3]) # Magnitude of translational displacement
     
     # Mock internal forces based on position (for visualization aesthetic only)
+    concrete_density = load_params['slab_density']
+    q_total_gravity = (concrete_density * load_params['slab_thickness'] + load_params['finish_load'] + load_params['live_load']) # Recalculate for mocking base
+
     for elem in elements:
         if 'beam' in elem['type']:
             # Mock forces based on position/span
@@ -477,7 +479,8 @@ def perform_analysis(nodes_df, elements, load_params, node_coords):
             # Mock forces based on gravity column loads
             L = elem['L']
             w_col_sw = concrete_density * elem['A']
-            mock_force_base = w_col_sw * L * 0.5 * (1 + (row['y'] / nodes_df['y'].max())) # Heavier at the bottom
+            p1_row = nodes_df[nodes_df['id'] == elem['start']].iloc[0]
+            mock_force_base = w_col_sw * L * 0.5 * (1 + (p1_row['y'] / nodes_df['y'].max())) # Heavier at the bottom
             elem['BM'] = np.random.uniform(mock_force_base * 0.1, mock_force_base * 0.2) 
             elem['SF'] = np.random.uniform(mock_force_base * 0.05, mock_force_base * 0.1) 
             
@@ -487,7 +490,6 @@ def perform_analysis(nodes_df, elements, load_params, node_coords):
     return nodes_df, elements
 
 # --- 6. Plotly Visualization Function (Unchanged) ---
-# ... (plot_3d_frame function remains the same, adapted to use u vector for deflection) ...
 def plot_3d_frame(nodes_df, elements, node_coords, display_mode):
     """
     Creates an interactive 3D Plotly figure for the frame structure,
@@ -661,7 +663,7 @@ prop_column = calculate_rc_properties(col_b, col_h, E_val)
 prop_beam = calculate_rc_properties(beam_b, beam_h, E_val)
 G_val = prop_column['G'] 
 
-st.sidebar.markdown(f"**Derived Shear Modulus G:** `{G_val:.2e}` kN/m²")
+st.sidebar.markdown(f"**Derived Shear Modulus G:** $ {G_val:.2e} \\text{ kN}/\\text{m}^2$")
 
 st.sidebar.markdown("---")
 st.sidebar.header("⚖️ Gravity Load Inputs")
@@ -729,7 +731,8 @@ if st.session_state.get('run_generation'):
             st.markdown(f"**Global Matrix Size (K):** `{st.session_state['K_global'].shape}`")
             st.markdown(f"**Total DoF:** `{nodes_df.attrs.get('total_dofs', 0)}`")
         with col3:
-            st.markdown(f"**E:** ${E_val:.2e} \text{ kN}/\text{m}^2$")
+            # FIX: Escaping the backslash for the LaTeX command \text{}
+            st.markdown(f"**E:** ${E_val:.2e} \\text{ kN}/\\text{m}^2$")
             
         st.subheader("Section Property Details (Used in Stiffness Matrix)")
         
