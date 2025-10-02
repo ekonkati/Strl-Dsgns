@@ -10,7 +10,6 @@ st.set_page_config(layout="wide", page_title="Improved 3D Frame Analyzer")
 
 # --- 1. Object-Oriented Model for the Structure ---
 # Using classes makes the code cleaner, more organized, and easier to extend.
-
 class Node:
     """Represents a single node in the 3D structure."""
     def __init__(self, id, x, y, z):
@@ -58,13 +57,19 @@ class Element:
 
         k[1,1] = k[7,7] = 12*E*Izz/L3
         k[1,7] = k[7,1] = -12*E*Izz/L3
-        k[1,5] = k[5,1] = k[1,11] = k[11,1] = 6*E*Izz/L2
-        k[5,1] = k[1,11] = -k[1,5] # Sign correction based on convention
+        k[1,5] = k[5,1] = k[1,11] = 6*E*Izz/L2
+        k[7,5] = k[5,7] = -6*E*Izz/L2
+        k[7,11] = k[11,7] = -6*E*Izz/L2
+        k[1,11] = k[11,1] = 6*E*Izz/L2
+        k[5,11] = k[11,5] = 2*E*Izz/L
 
         k[2,2] = k[8,8] = 12*E*Iyy/L3
         k[2,8] = k[8,2] = -12*E*Iyy/L3
-        k[2,4] = k[4,2] = k[2,10] = k[10,2] = 6*E*Iyy/L2
-        k[4,2] = k[10,2] = -k[2,4] # Sign correction
+        k[2,4] = k[4,2] = 6*E*Iyy/L2
+        k[8,4] = k[4,8] = -6*E*Iyy/L2
+        k[8,10] = k[10,8] = -6*E*Iyy/L2
+        k[2,10] = k[10,2] = 6*E*Iyy/L2
+        k[4,10] = k[10,4] = 2*E*Iyy/L
 
         k[3,3] = k[9,9] = G*J/L
         k[3,9] = k[9,3] = -G*J/L
@@ -79,6 +84,15 @@ class Element:
         for i in range(12):
             for j in range(i + 1, 12):
                 k[j, i] = k[i, j]
+        
+        # NOTE: Sign corrections applied for off-diagonal terms based on convention (using explicit terms above)
+        k[1,7] = k[7,1] = -12*E*Izz/L3
+        k[2,8] = k[8,2] = -12*E*Iyy/L3
+        k[1,5] = k[5,1] = k[7,11] = k[11,7] = 6*E*Izz/L2 # M-V terms
+        k[1,11] = k[11,1] = -6*E*Izz/L2 # V-M terms
+        k[2,4] = k[4,2] = k[8,10] = k[10,8] = 6*E*Iyy/L2 # M-V terms
+        k[2,10] = k[10,2] = -6*E*Iyy/L2 # V-M terms
+
         return k
 
     def get_transformation_matrix(self):
@@ -90,17 +104,36 @@ class Element:
 
         if self.length == 0: return np.identity(12)
         
+        # Local x-axis direction cosines
         cx_x, cx_y, cx_z = dx / self.length, dy / self.length, dz / self.length
 
-        if abs(cx_x) < 1e-6 and abs(cx_y) < 1e-6:
-            ref_vec = np.array([0, 1, 0])
+        # Determine reference vector for local z-axis (assuming orientation parallel to global Y-Z plane for beams, X-Z for columns)
+        # Standard approach: If parallel to Z (a column), use [0, 1, 0] as ref. If not (a beam), use [0, 0, 1] as ref.
+        is_column = np.isclose(dx, 0) and np.isclose(dy, 0)
+        if is_column:
+            # Column: Z-axis aligned. If Z is up, local x-axis is [0, 0, 1]. Use [1, 0, 0] as ref to align local Y with global Y or X
+            ref_vec = np.array([1, 0, 0])
         else:
-            ref_vec = np.array([0, 0, 1])
+            # Beam: Local z should be 'up' (parallel to global Z) if possible
+            if np.isclose(dz, 0): # Horizontal beam
+                ref_vec = np.array([0, 0, 1])
+            else: # Ramped beam, use a horizontal vector
+                 ref_vec = np.array([-dy, dx, 0]) # Horizontal vector orthogonal to the projection of x-axis
+
         
         local_x_vec = np.array([cx_x, cx_y, cx_z])
+        # Find local z-axis: must be orthogonal to local x. 
         local_z_vec = np.cross(local_x_vec, ref_vec)
+        
+        # Handle the case where local_x_vec is parallel to ref_vec (e.g., column on Z-axis with ref [0, 0, 1])
+        if np.linalg.norm(local_z_vec) < 1e-6:
+             if np.isclose(cx_x, 1) or np.isclose(cx_x, -1): ref_vec = np.array([0, 0, 1])
+             elif np.isclose(cx_y, 1) or np.isclose(cx_y, -1): ref_vec = np.array([1, 0, 0])
+             else: ref_vec = np.array([1, 0, 0])
+             local_z_vec = np.cross(local_x_vec, ref_vec)
+
         local_z_vec /= np.linalg.norm(local_z_vec)
-        local_y_vec = np.cross(local_z_vec, local_x_vec)
+        local_y_vec = np.cross(local_z_vec, local_x_vec) # Recalculate y-axis to ensure right-handed system
         
         R = np.vstack([local_x_vec, local_y_vec, local_z_vec])
         
@@ -146,13 +179,27 @@ class Structure:
                     self.K_global[global_i, global_j] += k_global_elem[i, j]
 
     def add_gravity_loads(self, q_gravity, levels):
+        # Applies uniform gravity load on horizontal beams (at floor levels) as equivalent nodal forces (Fz)
         for z in levels:
             level_nodes = {n.id for n in self.nodes.values() if np.isclose(n.z, z)}
             if not level_nodes: continue
             
-            level_beams = [e for e in self.elements.values() if e.start_node.id in level_nodes and e.end_node.id in level_nodes]
+            # Find horizontal beams at this level
+            level_beams = [e for e in self.elements.values() if e.start_node.z == e.end_node.z and e.start_node.id in level_nodes and e.end_node.id in level_nodes]
             for beam in level_beams:
                 load_at_node = q_gravity * beam.length / 2
+                # Apply load in -Z direction (index 2 for Fz)
+                self.F_global[self.dof_map[(beam.start_node.id, 2)]] -= load_at_node
+                self.F_global[self.dof_map[(beam.end_node.id, 2)]] -= load_at_node
+
+    # NEW FUNCTION: Apply uniformly distributed wall loads
+    def add_wall_loads(self, wall_load_data):
+        # Applies UDL loads on specified element IDs as equivalent nodal forces (Fz)
+        for elem_id, load_q in wall_load_data.items():
+            if elem_id in self.elements:
+                beam = self.elements[elem_id]
+                load_at_node = load_q * beam.length / 2
+                # Apply load in -Z direction (index 2 for Fz)
                 self.F_global[self.dof_map[(beam.start_node.id, 2)]] -= load_at_node
                 self.F_global[self.dof_map[(beam.end_node.id, 2)]] -= load_at_node
 
@@ -171,13 +218,21 @@ class Structure:
 
     def calculate_element_results(self):
         if self.U_global is None: return
+        # List of keys for the local end forces (12 total)
+        keys = ['Axial_Start', 'Shear_Y_Start', 'Shear_Z_Start', 'Torsion_Start', 'Moment_Y_Start', 'Moment_Z_Start',
+                'Axial_End', 'Shear_Y_End', 'Shear_Z_End', 'Torsion_End', 'Moment_Y_End', 'Moment_Z_End']
         for elem in self.elements.values():
             dof_indices = [self.dof_map[(nid, i)] for nid in [elem.start_node.id, elem.end_node.id] for i in range(6)]
             u_global_elem = self.U_global[dof_indices]
             u_local_elem = elem.get_transformation_matrix().T @ u_global_elem
             f_local = elem.get_local_stiffness_matrix() @ u_local_elem
-            elem.results = {'Axial_Start':f_local[0],'Axial_End':f_local[6],'Shear_Y_Start':f_local[1],'Shear_Y_End':f_local[7],'Shear_Z_Start':f_local[2],'Shear_Z_End':f_local[8],'Torsion_Start':f_local[3],'Torsion_End':f_local[9],'Moment_Y_Start':f_local[4],'Moment_Y_End':f_local[10],'Moment_Z_Start':f_local[5],'Moment_Z_End':f_local[11]}
-            elem.results['Max_Abs_Moment'] = max(abs(f_local[5]), abs(f_local[11]))
+            
+            # Store all 12 end forces/moments
+            elem.results = {keys[i]: f_local[i] for i in range(12)}
+            elem.results['Max_Abs_Moment'] = max(abs(f_local[4]), abs(f_local[5]), abs(f_local[10]), abs(f_local[11]))
+            # Also store displacement for potential future use (optional)
+            elem.results['Disp_Local_Start'] = u_local_elem[:6]
+            elem.results['Disp_Local_End'] = u_local_elem[6:]
 
     def calculate_reactions(self):
         if self.U_global is None: return
@@ -206,142 +261,421 @@ def parse_grid_input(input_string):
 def calculate_rc_properties(b, h, E, nu=0.2):
     A, Izz, Iyy, G = b*h, (b*h**3)/12, (h*b**3)/12, E/(2*(1+nu))
     a, c = max(b, h), min(b, h)
+    # Torsion constant for a rectangular section
     J = a*(c**3)*(1/3 - 0.21*(c/a)*(1-(c**4)/(12*a**4)))
     return {'E':E, 'G':G, 'A':A, 'Iyy':Iyy, 'Izz':Izz, 'J':J}
+
+# NEW FUNCTION: Parses the brick load input string
+def parse_and_apply_wall_loads(load_string):
+    """Parses a string like '2, 3, 4: 5\n10, 12: 7' into a dictionary of {elem_id: load_q}."""
+    wall_load_data = {}
+    if not load_string: return wall_load_data
+
+    # Split by line
+    for line in load_string.strip().split('\n'):
+        line = line.strip()
+        if not line or ':' not in line: continue
+
+        parts = line.split(':')
+        elem_ids_str = parts[0].strip()
+        load_q_str = parts[1].strip()
+        
+        try:
+            load_q = float(load_q_str)
+            if load_q <= 0: continue
+        except ValueError:
+            continue
+        
+        # Parse element IDs
+        elem_ids = []
+        for segment in elem_ids_str.split(','):
+            try:
+                elem_ids.append(int(segment.strip()))
+            except ValueError:
+                pass
+        
+        for elem_id in elem_ids:
+            wall_load_data[elem_id] = load_q
+            
+    return wall_load_data
 
 # --- 3. Streamlit Caching ---
 
 @st.cache_data
-def generate_and_analyze_structure(x_dims, y_dims, z_dims, col_props, beam_props, load_params):
+def generate_and_analyze_structure(x_dims, y_dims, z_dims, col_props, beam_props, load_params, wall_load_data):
     s = Structure()
     x_coords, y_coords, z_coords = [0]+list(np.cumsum(x_dims)), [0]+list(np.cumsum(y_dims)), [0]+list(np.cumsum(z_dims))
     node_id, elem_id, node_map = 1, 1, {}
 
+    # 1. Create Nodes
     for iz, z in enumerate(z_coords):
         for iy, y in enumerate(y_coords):
             for ix, x in enumerate(x_coords):
-                s.add_node(node_id, x, y, z); node_map[(ix, iy, iz)] = node_id
+                s.add_node(node_id, x, y, z)
+                node_map[(ix, iy, iz)] = node_id
                 if np.isclose(z, 0): s.set_support(node_id, restraints=[True]*6)
                 node_id += 1
 
+    # 2. Create Elements (Columns)
     for iz in range(len(z_coords)-1):
         for iy in range(len(y_coords)):
-            for ix in range(len(x_coords)): s.add_element(elem_id, node_map[(ix,iy,iz)], node_map[(ix,iy,iz+1)], col_props); elem_id += 1
+            for ix in range(len(x_coords)): 
+                s.add_element(elem_id, node_map[(ix,iy,iz)], node_map[(ix,iy,iz+1)], col_props)
+                elem_id += 1
+    
+    # 3. Create Elements (Beams in X-direction)
     for iz in range(1, len(z_coords)):
         for iy in range(len(y_coords)):
-            for ix in range(len(x_coords)-1): s.add_element(elem_id, node_map[(ix,iy,iz)], node_map[(ix+1,iy,iz)], beam_props); elem_id += 1
+            for ix in range(len(x_coords)-1): 
+                s.add_element(elem_id, node_map[(ix,iy,iz)], node_map[(ix+1,iy,iz)], beam_props)
+                elem_id += 1
+    
+    # 4. Create Elements (Beams in Y-direction)
     for iz in range(1, len(z_coords)):
         for iy in range(len(y_coords)-1):
-            for ix in range(len(x_coords)): s.add_element(elem_id, node_map[(ix,iy,iz)], node_map[(ix,iy+1,iz)], beam_props); elem_id += 1
+            for ix in range(len(x_coords)): 
+                s.add_element(elem_id, node_map[(ix,iy,iz)], node_map[(ix,iy+1,iz)], beam_props)
+                elem_id += 1
     
+    # 5. Assemble and Apply Loads
     s.assemble_matrices()
     s.add_gravity_loads(load_params['q_total_gravity'], z_coords[1:])
+    s.add_wall_loads(wall_load_data) # NEW: Apply wall loads
+    
+    # 6. Solve and Calculate Results
     success, message = s.solve()
-    if success: s.calculate_element_results(); s.calculate_reactions()
+    if success: 
+        s.calculate_element_results()
+        s.calculate_reactions()
     
     if not success: return {'success': False, 'message': message}
 
+    # 7. Package Results
     return {
         'success': True, 'message': message,
         'nodes': [{'id':n.id, 'x':n.x, 'y':n.y, 'z':n.z, 'restraints':n.restraints, 'reactions':n.reactions} for n in s.nodes.values()],
-        'elements': [{'id':e.id, 'start_node_id':e.start_node.id, 'end_node_id':e.end_node.id, 'start_node_pos':(e.start_node.x,e.start_node.y,e.start_node.z), 'end_node_pos':(e.end_node.x,e.end_node.y,e.end_node.z), 'results':e.results} for e in s.elements.values()],
+        'elements': [{'id':e.id, 'start_node_id':e.start_node.id, 'end_node_id':e.end_node.id, 'start_node_pos':(e.start_node.x,e.start_node.y,e.start_node.z), 'end_node_pos':(e.end_node.x,e.end_node.y,e.end_node.z), 'length':e.length, 'results':e.results} for e in s.elements.values()],
         'summary': {'num_nodes':len(s.nodes), 'num_elements':len(s.elements), 'k_shape':s.K_global.shape if s.K_global is not None else (0,0)}
     }
 
 # --- 4. Plotting Functions ---
 
-def plot_3d_frame(nodes, elements, display_mode='Structure'):
+def get_hover_text(elem):
+    """Generates detailed hover text for an element."""
+    text = f"**Element {elem['id']}** (L={elem['length']:.2f}m)<br>"
+    for key, value in elem['results'].items():
+        if not key.startswith('Disp'): # Exclude displacement from hover for brevity
+            unit = 'kNm' if key.startswith('Moment') or key.startswith('Torsion') else 'kN'
+            text += f"{key.replace('_', ' ')}: {value:.2f} {unit}<br>"
+    return text
+
+def plot_3d_frame(nodes, elements, display_mode='Structure', show_nodes=False, show_elems=False):
     fig = go.Figure()
-    if display_mode == 'Bending Moment (Myz)':
-        max_moment = max((abs(e['results'].get('Max_Abs_Moment', 0)) for e in elements), default=0)
-        for elem in elements:
-            moment = elem['results'].get('Max_Abs_Moment', 0)
-            color_val = moment/max_moment if max_moment > 0 else 0
-            color = f'rgb({int(255*color_val)}, 0, {int(255*(1-color_val))})'
-            start_pos, end_pos = elem['start_node_pos'], elem['end_node_pos']
-            fig.add_trace(go.Scatter3d(x=[start_pos[0],end_pos[0]], y=[start_pos[1],end_pos[1]], z=[start_pos[2],end_pos[2]], mode='lines', line=dict(color=color, width=5), hoverinfo='text', hovertext=f"Elem {elem['id']}<br>Moment: {moment:.2f} kNm", name=f"Elem {elem['id']}"))
-    else:
-        edge_x, edge_y, edge_z = [], [], []
-        for elem in elements:
-            start_pos, end_pos = elem['start_node_pos'], elem['end_node_pos']
-            edge_x.extend([start_pos[0],end_pos[0],None]); edge_y.extend([start_pos[1],end_pos[1],None]); edge_z.extend([start_pos[2],end_pos[2],None])
-        fig.add_trace(go.Scatter3d(x=edge_x, y=edge_y, z=edge_z, mode='lines', line=dict(color='darkblue', width=4), name='Elements'))
     
+    # 1. Structure/Moment Lines
+    edge_x, edge_y, edge_z, hover_texts = [], [], [], []
+    max_abs_result = 1 # Avoid division by zero
+    result_key = None
+    
+    if display_mode == 'Bending Moment (Myz)':
+        max_abs_result = max((abs(e['results'].get('Moment_Z_End', 0)) for e in elements), default=0)
+        result_key = 'Moment_Z_End'
+    elif display_mode == 'Axial Force (Fx)':
+        max_abs_result = max((abs(e['results'].get('Axial_End', 0)) for e in elements), default=0)
+        result_key = 'Axial_End'
+
+    for elem in elements:
+        start_pos, end_pos = elem['start_node_pos'], elem['end_node_pos']
+        edge_x.extend([start_pos[0],end_pos[0],None])
+        edge_y.extend([start_pos[1],end_pos[1],None])
+        edge_z.extend([start_pos[2],end_pos[2],None])
+        hover_texts.extend([get_hover_text(elem), get_hover_text(elem), None])
+
+        line_color = 'darkblue'
+        line_width = 4
+        
+        if result_key:
+            # Color coding for result plots
+            result_val = elem['results'].get(result_key, 0)
+            normalized_val = result_val / max_abs_result if max_abs_result > 0 else 0
+            # Red for positive, Blue for negative (or vice versa), using a simplified color logic
+            if np.isclose(normalized_val, 0):
+                line_color = 'gray'
+            elif normalized_val > 0:
+                line_color = f'rgb({int(255*normalized_val)}, 0, 0)' # Red scale
+            else:
+                line_color = f'rgb(0, 0, {int(255*abs(normalized_val))})' # Blue scale
+            line_width = 5
+        
+        fig.add_trace(go.Scatter3d(x=[start_pos[0],end_pos[0]], y=[start_pos[1],end_pos[1]], z=[start_pos[2],end_pos[2]], 
+                                   mode='lines', line=dict(color=line_color, width=line_width), 
+                                   hoverinfo='text', hovertext=get_hover_text(elem), name=f"Elem {elem['id']}", showlegend=False))
+
+    # 2. Node Markers
     node_x, node_y, node_z = [n['x'] for n in nodes], [n['y'] for n in nodes], [n['z'] for n in nodes]
-    fig.add_trace(go.Scatter3d(x=node_x, y=node_y, z=node_z, mode='markers', marker=dict(size=5, color='purple'), name='Nodes', text=[f"Node {n['id']}" for n in nodes], hoverinfo='text'))
-    fig.update_layout(title=f"3D Frame Visualization - {display_mode}", scene=dict(xaxis_title='X (m)', yaxis_title='Y (m)', zaxis_title='Z (m)', aspectratio=dict(x=1.5, y=1.5, z=1)), margin=dict(l=0,r=0,b=0,t=40), showlegend=False)
+    node_texts = [f"Node {n['id']}" for n in nodes]
+    fig.add_trace(go.Scatter3d(x=node_x, y=node_y, z=node_z, mode='markers', marker=dict(size=5, color='purple'), 
+                               name='Nodes', text=node_texts, hoverinfo='text', showlegend=False))
+    
+    # 3. Node Labels (NEW)
+    if show_nodes:
+        fig.add_trace(go.Scatter3d(x=node_x, y=node_y, z=node_z, mode='text', text=[str(n['id']) for n in nodes], 
+                                   textfont=dict(color='black', size=10), name='Node IDs', showlegend=False))
+
+    # 4. Element Labels (NEW)
+    if show_elems:
+        elem_x, elem_y, elem_z = [], [], []
+        for elem in elements:
+            start_pos, end_pos = elem['start_node_pos'], elem['end_node_pos']
+            elem_x.append((start_pos[0] + end_pos[0]) / 2)
+            elem_y.append((start_pos[1] + end_pos[1]) / 2)
+            elem_z.append((start_pos[2] + end_pos[2]) / 2)
+        fig.add_trace(go.Scatter3d(x=elem_x, y=elem_y, z=elem_z, mode='text', text=[str(e['id']) for e in elements], 
+                                   textfont=dict(color='darkred', size=10), name='Element IDs', showlegend=False))
+
+    fig.update_layout(title=f"3D Frame Visualization - {display_mode}", 
+                      scene=dict(xaxis_title='X (m)', yaxis_title='Y (m)', zaxis_title='Z (m)', 
+                                 aspectratio=dict(x=1.5, y=1.5, z=1)), 
+                      margin=dict(l=0,r=0,b=0,t=40), showlegend=False)
     return fig
 
-def plot_2d_frame(nodes, elements, plane_axis, coordinate):
+
+# UPDATED FUNCTION: Plot 2D frame with labels and selected force/moment
+def plot_2d_frame(nodes, elements, plane_axis, coordinate, display_mode='Structure', show_nodes=False, show_elems=False):
     fig = go.Figure()
-    if plane_axis == 'Y': plane_nodes_list, x_key, z_key = [n for n in nodes if np.isclose(n['y'], coordinate)], 'x', 'z'
-    else: plane_nodes_list, x_key, z_key = [n for n in nodes if np.isclose(n['x'], coordinate)], 'y', 'z'
+    
+    # Determine the coordinates and plane-specific keys
+    if plane_axis == 'Y': 
+        plane_nodes_list, x_key, z_key = [n for n in nodes if np.isclose(n['y'], coordinate)], 'x', 'z'
+    else: 
+        plane_nodes_list, x_key, z_key = [n for n in nodes if np.isclose(n['x'], coordinate)], 'y', 'z'
+        
     plane_node_ids = {n['id'] for n in plane_nodes_list}
 
+    # Map the display mode to the element result key and unit
+    result_map = {
+        'Structure': (None, None, 1),
+        'Axial Force (Fx)': ('Axial_Start', 'kN', 1),
+        'Shear Force (Fz)': ('Shear_Z_Start', 'kN', 1),
+        'Bending Moment (My)': ('Moment_Y_Start', 'kNm', 1),
+        'Bending Moment (Mz)': ('Moment_Z_Start', 'kNm', 1)
+    }
+    result_key, unit, scale = result_map.get(display_mode, (None, None, 1))
+    
+    # 1. Elements and Force/Moment Diagrams
     for elem in elements:
         if elem['start_node_id'] in plane_node_ids and elem['end_node_id'] in plane_node_ids:
             start_pos, end_pos = elem['start_node_pos'], elem['end_node_pos']
-            x_coords, z_coords = [start_pos[0 if plane_axis=='Y' else 1], end_pos[0 if plane_axis=='Y' else 1]], [start_pos[2], end_pos[2]]
-            fig.add_trace(go.Scatter(x=x_coords, y=z_coords, mode='lines', line=dict(color='darkblue', width=3), hoverinfo='none'))
+            
+            # Map coordinates to X-Z plane
+            start_x = start_pos[0 if plane_axis=='Y' else 1]
+            end_x = end_pos[0 if plane_axis=='Y' else 1]
+            z_coords = [start_pos[2], end_pos[2]]
+            x_coords = [start_x, end_x]
+            
+            # Base element line
+            fig.add_trace(go.Scatter(x=x_coords, y=z_coords, mode='lines', line=dict(color='darkblue', width=3), 
+                                     name=f"Elem {elem['id']}", hoverinfo='text', hovertext=get_hover_text(elem), showlegend=False))
+            
+            # Element labels (NEW)
+            if show_elems:
+                mid_x, mid_z = (start_x + end_x) / 2, (z_coords[0] + z_coords[1]) / 2
+                fig.add_trace(go.Scatter(x=[mid_x], y=[mid_z], mode='text', text=[str(elem['id'])], 
+                                         textfont=dict(color='darkred', size=10), showlegend=False))
 
-    fig.add_trace(go.Scatter(x=[n[x_key] for n in plane_nodes_list], y=[n[z_key] for n in plane_nodes_list], mode='markers', marker=dict(size=8, color='purple'), name='Nodes', text=[f"Node {n['id']}" for n in plane_nodes_list], hoverinfo='text'))
-    fig.update_layout(title=f"2D Elevation on {plane_axis.replace('Y', 'X-Z').replace('X', 'Y-Z')} Plane at {plane_axis}={coordinate}m", xaxis_title=f'{x_key.upper()}-axis (m)', yaxis_title='Z-axis (m)', showlegend=False)
+            # Result display (End Values as labels)
+            if result_key:
+                # Find start/end keys for the selected result
+                start_key = result_key
+                end_key = result_key.replace('Start', 'End')
+                
+                # Get local force/moment values
+                val_start = elem['results'].get(start_key, 0)
+                val_end = elem['results'].get(end_key, 0)
+                
+                # Element length for offset (only use horizontal/vertical length for cleaner label offset)
+                dx_proj = abs(end_x - start_x)
+                dz_proj = abs(z_coords[1] - z_coords[0])
+
+                # Position the start label
+                if not np.isclose(val_start, 0):
+                    x_offset = -0.1 if dx_proj > dz_proj else 0.1 # Offset label for beams vs columns
+                    y_offset = 0.1 if dx_proj > dz_proj else -0.1
+                    fig.add_annotation(x=start_x + x_offset, y=z_coords[0] + y_offset, 
+                                       text=f"{val_start:.2f} {unit}", showarrow=False, 
+                                       font=dict(size=10, color='red' if val_start > 0 else 'blue'))
+
+                # Position the end label
+                if not np.isclose(val_end, 0):
+                    x_offset = 0.1 if dx_proj > dz_proj else -0.1
+                    y_offset = 0.1 if dx_proj > dz_proj else -0.1
+                    fig.add_annotation(x=end_x + x_offset, y=z_coords[1] + y_offset, 
+                                       text=f"{val_end:.2f} {unit}", showarrow=False, 
+                                       font=dict(size=10, color='red' if val_end > 0 else 'blue'))
+
+
+    # 2. Node Markers
+    fig.add_trace(go.Scatter(x=[n[x_key] for n in plane_nodes_list], y=[n[z_key] for n in plane_nodes_list], 
+                             mode='markers', marker=dict(size=8, color='purple'), name='Nodes', 
+                             text=[f"Node {n['id']}" for n in plane_nodes_list], hoverinfo='text', showlegend=False))
+
+    # 3. Node Labels (NEW)
+    if show_nodes:
+        fig.add_trace(go.Scatter(x=[n[x_key] for n in plane_nodes_list], y=[n[z_key] for n in plane_nodes_list], 
+                                 mode='text', text=[str(n['id']) for n in plane_nodes_list], 
+                                 textposition="top center", textfont=dict(color='black', size=10), showlegend=False))
+        
+    title_mode = display_mode if display_mode != 'Structure' else 'Frame'
+    fig.update_layout(title=f"2D Elevation ({title_mode}) on {plane_axis.replace('Y', 'X-Z').replace('X', 'Y-Z')} Plane at {plane_axis}={coordinate}m", 
+                      xaxis_title=f'{x_key.upper()}-axis (m)', yaxis_title='Z-axis (m)', showlegend=False)
     fig.update_yaxes(scaleanchor="x", scaleratio=1)
     return fig
+
 
 # --- 5. Main Streamlit App UI ---
 st.title("🏗️ Improved 3D Frame Analyzer")
 st.write("Define your building grid, sections, and loads to generate and analyze a 3D frame.")
 
 with st.sidebar:
-    st.header("1. Frame Geometry"); x_grid = st.text_input("X-spans (m)", "3x6, 5.5"); y_grid = st.text_input("Y-spans (m)", "2x5, 4"); z_grid = st.text_input("Z-heights (m)", "4, 2x3.5")
-    st.header("2. Section & Material"); E = st.number_input("E (GPa)", 30.0)*1e6
+    st.header("1. Frame Geometry")
+    x_grid = st.text_input("X-spans (m)", "3x6, 5.5")
+    y_grid = st.text_input("Y-spans (m)", "2x5, 4")
+    z_grid = st.text_input("Z-heights (m)", "4, 2x3.5")
+    
+    st.header("2. Section & Material")
+    E = st.number_input("E (GPa)", 30.0)*1e6
     with st.expander("Column & Beam Sizes"):
         col_b, col_h = st.number_input("Col b (mm)", 400)/1000, st.number_input("Col h (mm)", 400)/1000
         beam_b, beam_h = st.number_input("Beam b (mm)", 300)/1000, st.number_input("Beam h (mm)", 500)/1000
+        
     st.header("3. Gravity Loads")
-    with st.expander("Load Details"):
+    with st.expander("Slab & Live Loads"):
         slab_d, slab_t = st.number_input("Slab Density (kN/m³)", 25.0), st.number_input("Slab Thickness (m)", 0.150)
         fin_l, live_l = st.number_input("Finishes (kN/m²)", 1.5), st.number_input("Live Load (kN/m²)", 3.0)
+        
+    # NEW INPUT: Brick Wall Loads
+    st.subheader("4. Brick Wall Loads")
+    wall_load_input = st.text_area("Element Loads (e.g., 2, 3: 5 kN/m)", 
+                                   placeholder="Elem IDs: Load (kN/m)\nExample: 2, 3: 5\n10, 12, 25: 7", height=100)
+    
     analyze_button = st.button("Generate & Analyze Frame", type="primary")
 
 if analyze_button:
     x_dims, y_dims, z_dims = parse_grid_input(x_grid), parse_grid_input(y_grid), parse_grid_input(z_grid)
-    if not all([x_dims, y_dims, z_dims]): st.error("Invalid grid input.")
+    
+    # NEW: Parse wall loads
+    wall_load_data = parse_and_apply_wall_loads(wall_load_input)
+    
+    if not all([x_dims, y_dims, z_dims]): 
+        st.error("Invalid grid input.")
     else:
         col_p, beam_p = calculate_rc_properties(col_b, col_h, E), calculate_rc_properties(beam_b, beam_h, E)
         q_total = slab_d*slab_t + fin_l + live_l
+        
         with st.spinner("Running Finite Element Analysis..."):
-            analysis_results = generate_and_analyze_structure(x_dims, y_dims, z_dims, col_p, beam_p, {'q_total_gravity': q_total})
-        if not analysis_results['success']: st.error(f"Analysis Failed: {analysis_results['message']}")
+            analysis_results = generate_and_analyze_structure(x_dims, y_dims, z_dims, col_p, beam_p, 
+                                                              {'q_total_gravity': q_total}, wall_load_data)
+                                                              
+        if not analysis_results['success']: 
+            st.error(f"Analysis Failed: {analysis_results['message']}")
         else:
-            st.success("Analysis complete!"); st.session_state['analysis_results'] = analysis_results
+            st.success("Analysis complete!")
+            st.session_state['analysis_results'] = analysis_results
+            
             st.subheader("FEA Results Summary")
             summary = analysis_results['summary']
-            max_moment = max((abs(e['results'].get('Max_Abs_Moment',0)) for e in analysis_results['elements']), default=0)
-            c1,c2,c3 = st.columns(3); c1.metric("Nodes", summary['num_nodes']); c1.metric("Elements", summary['num_elements']); c2.metric("Pressure", f"{q_total:.2f} kN/m²"); c2.metric("K Size", f"{summary['k_shape']}"); c3.metric("Max Moment", f"{max_moment:.2f} kNm")
+            # Max moment based on all four local end moments (My, Mz at start/end)
+            max_moment = max((e['results'].get('Max_Abs_Moment',0) for e in analysis_results['elements']), default=0)
+            
+            c1,c2,c3 = st.columns(3)
+            c1.metric("Nodes", summary['num_nodes'])
+            c1.metric("Elements", summary['num_elements'])
+            c2.metric("Slab Pressure", f"{q_total:.2f} kN/m²")
+            c2.metric("K Size", f"{summary['k_shape']}")
+            c3.metric("Wall Loads Applied", f"{len(wall_load_data)} elements")
+            c3.metric("Max Moment", f"{max_moment:.2f} kNm")
+
 
 if 'analysis_results' in st.session_state and st.session_state['analysis_results']['success']:
     results, nodes, elements = st.session_state['analysis_results'], st.session_state['analysis_results']['nodes'], st.session_state['analysis_results']['elements']
-    st.subheader("Interactive 3D Visualization"); display_mode = st.selectbox("Display Mode", ['Structure', 'Bending Moment (Myz)'])
-    st.plotly_chart(plot_3d_frame(nodes, elements, display_mode), use_container_width=True)
+    
+    # 3D Visualization Section
+    st.subheader("Interactive 3D Visualization")
+    
+    c_3d_1, c_3d_2 = st.columns([0.6, 0.4])
+    with c_3d_1:
+        display_mode_3d = st.selectbox("Display Mode", ['Structure', 'Bending Moment (Myz)', 'Axial Force (Fx)'], key='display_mode_3d')
+    with c_3d_2:
+        col_viz_1, col_viz_2 = st.columns(2)
+        show_nodes_3d = col_viz_1.checkbox("Show Node IDs", key='show_nodes_3d')
+        show_elems_3d = col_viz_2.checkbox("Show Element IDs", key='show_elems_3d')
+    
+    st.plotly_chart(plot_3d_frame(nodes, elements, display_mode_3d, show_nodes_3d, show_elems_3d), use_container_width=True)
+    
+    # Tabs for Detailed Results
     tab1, tab2, tab3 = st.tabs(["2D Elevation View", "Support Reactions", "Detailed Element Results"])
+    
     with tab1:
-        plane_axis = st.radio("Grid Plane", ('X-Z (Y-Gridline)', 'Y-Z (X-Gridline)'))
-        if plane_axis == 'X-Z (Y-Gridline)':
-            y_coords = sorted(list(set(n['y'] for n in nodes)))
-            selected_y = st.selectbox("Select Y-grid", options=y_coords, key='y_coord')
-            st.plotly_chart(plot_2d_frame(nodes, elements, 'Y', selected_y), use_container_width=True)
-        else:
-            x_coords = sorted(list(set(n['x'] for n in nodes)))
-            selected_x = st.selectbox("Select X-grid", options=x_coords, key='x_coord')
-            st.plotly_chart(plot_2d_frame(nodes, elements, 'X', selected_x), use_container_width=True)
+        st.subheader("2D Elevation View and Result Diagrams")
+        
+        col_2d_1, col_2d_2 = st.columns(2)
+        plane_axis = col_2d_1.radio("Grid Plane", ('X-Z (Y-Gridline)', 'Y-Z (X-Gridline)'), key='plane_axis')
+        display_mode_2d = col_2d_2.selectbox("Result Diagram", ['Structure', 'Axial Force (Fx)', 'Shear Force (Fz)', 'Bending Moment (My)', 'Bending Moment (Mz)'], key='display_mode_2d')
+        
+        col_2d_3, col_2d_4 = st.columns([0.6, 0.4])
+        
+        with col_2d_3:
+            if plane_axis == 'X-Z (Y-Gridline)':
+                y_coords = sorted(list(set(n['y'] for n in nodes)))
+                selected_y = st.selectbox("Select Y-grid Coordinate", options=y_coords, key='y_coord')
+                plane_key = 'Y'
+                coordinate = selected_y
+            else:
+                x_coords = sorted(list(set(n['x'] for n in nodes)))
+                selected_x = st.selectbox("Select X-grid Coordinate", options=x_coords, key='x_coord')
+                plane_key = 'X'
+                coordinate = selected_x
+        
+        with col_2d_4:
+            show_nodes_2d = st.checkbox("Show Node IDs", key='show_nodes_2d')
+            show_elems_2d = st.checkbox("Show Element IDs", key='show_elems_2d')
+        
+        st.plotly_chart(plot_2d_frame(nodes, elements, plane_key, coordinate, display_mode_2d, show_nodes_2d, show_elems_2d), use_container_width=True)
+
     with tab2:
+        st.subheader("Support Reactions (Global X, Y, Z)")
         support_nodes = {n['id']: n for n in nodes if any(n['restraints'])}
         if support_nodes:
-            node_id = st.selectbox("Select support node", options=list(support_nodes.keys()))
-            st.dataframe(pd.DataFrame({"Force/Moment": ["Fx", "Fy", "Fz", "Mx", "My", "Mz"], "Value (kN, kNm)": support_nodes[node_id]['reactions']}).round(2))
+            node_id = st.selectbox("Select support node", options=list(support_nodes.keys()), key='support_node_select')
+            st.dataframe(pd.DataFrame({
+                "DOF": ["Fx", "Fy", "Fz", "Mx", "My", "Mz"], 
+                "Value (kN, kNm)": support_nodes[node_id]['reactions']
+            }).round(2), use_container_width=True)
         else: st.write("No support nodes found.")
+        
     with tab3:
-        data = [{'ID':e['id'], 'Start':e['start_node_id'], 'End':e['end_node_id'], 'Max Moment':e['results'].get('Max_Abs_Moment',0), 'Axial':e['results'].get('Axial_Start',0)} for e in elements]
+        st.subheader("All Element End Forces & Moments (Local Coordinates)")
+        # Prepare data for the detailed element results table (NEW/IMPROVED)
+        data = []
+        for e in elements:
+            res = e['results']
+            data.append({
+                'ID': e['id'], 
+                'Start Node': e['start_node_id'], 
+                'End Node': e['end_node_id'], 
+                'Length (m)': e['length'],
+                'Max |M| (kNm)': res.get('Max_Abs_Moment', 0),
+                'Axial Start (kN)': res.get('Axial_Start', 0), 
+                'Axial End (kN)': res.get('Axial_End', 0),
+                'Shear Y Start (kN)': res.get('Shear_Y_Start', 0),
+                'Shear Y End (kN)': res.get('Shear_Y_End', 0),
+                'Shear Z Start (kN)': res.get('Shear_Z_Start', 0),
+                'Shear Z End (kN)': res.get('Shear_Z_End', 0),
+                'Torsion Start (kNm)': res.get('Torsion_Start', 0),
+                'Torsion End (kNm)': res.get('Torsion_End', 0),
+                'Moment Y Start (kNm)': res.get('Moment_Y_Start', 0),
+                'Moment Y End (kNm)': res.get('Moment_Y_End', 0),
+                'Moment Z Start (kNm)': res.get('Moment_Z_Start', 0),
+                'Moment Z End (kNm)': res.get('Moment_Z_End', 0),
+            })
         st.dataframe(pd.DataFrame(data).round(2), use_container_width=True)
