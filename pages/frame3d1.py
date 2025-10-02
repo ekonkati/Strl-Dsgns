@@ -2,14 +2,14 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import re
 from collections import defaultdict
+from typing import List, Dict, Any, Tuple
 
 # --- Page Configuration ---
-st.set_page_config(layout="wide", page_title="Improved 3D Frame Analyzer")
+st.set_page_config(layout="wide", page_title="Full 3D FEA Frame Analyzer (IS Code)")
 
 # --- 1. Object-Oriented Model for the Structure ---
-# Using classes makes the code cleaner, more organized, and easier to extend.
+# Reintroducing structure classes to support full FEA functionality
 
 class Node:
     """Represents a single node in the 3D structure."""
@@ -19,689 +19,744 @@ class Node:
         # 6 degrees of freedom (DOF): [dx, dy, dz, rx, ry, rz]
         # True means the DOF is restrained (fixed).
         self.restraints = [False] * 6
-        self.reactions = {} # Now stores reactions per load case
+        self.reactions = np.zeros(6) # Fx, Fy, Fz, Mx, My, Mz
+        self.load = np.zeros(6)      # Nodal loads
+        self.displacements = np.zeros(6) # Calculated displacements
 
     def __repr__(self):
         return f"Node(id={self.id}, pos=({self.x}, {self.y}, {self.z}))"
 
 class Element:
-    """
-    Represents a single beam/column element in the 3D structure.
-    Stores results as a dictionary mapping Load Case Name to results.
-    """
+    """Represents a single beam/column element in the 3D structure."""
     def __init__(self, id, start_node, end_node, props):
         self.id = int(id)
-        self.start_node = start_node
-        self.end_node = end_node
-        self.E, self.G = float(props['E']), float(props['G'])
-        self.A = float(props['A'])
-        self.Iy, self.Iz = float(props['Iy']), float(props['Iz'])
-        self.J = float(props['J'])
+        self.start_node = start_node # Node object
+        self.end_node = end_node     # Node object
+        self.props = props           # {'E', 'G', 'A', 'Iy', 'Iz', 'J', 'rho'}
         self.length = self._calculate_length()
-        
-        # Results is now a dictionary mapping case_name -> {results}
-        self.results = {} 
 
     def _calculate_length(self):
+        """Calculates the element length."""
         dx = self.end_node.x - self.start_node.x
         dy = self.end_node.y - self.start_node.y
         dz = self.end_node.z - self.start_node.z
         return np.sqrt(dx**2 + dy**2 + dz**2)
 
-    def calculate_results(self, case_name, U_case, dof_map):
-        """Calculates and stores 12 internal forces for a specific load case."""
-        # This implementation requires the element stiffness matrix [k] and transformation matrix [T] 
-        # which are typically computed during the global assembly. For simplification,
-        # we assume the displacement vector U_case is available and the global force vector F_global 
-        # has been solved for. F_local = [k] * [T] * [u_global]
+    def __repr__(self):
+        return f"Element(id={self.id}, nodes={self.start_node.id}-{self.end_node.id})"
+
+# --- 2. 3D Beam Element Stiffness & Transformation Functions ---
+
+def get_element_stiffness_matrix(element: Element) -> np.ndarray:
+    """Generates the 12x12 local stiffness matrix for a 3D beam element."""
+    L = element.length
+    E, G = element.props['E'], element.props['G']
+    A = element.props['A']
+    Iy, Iz = element.props['Iy'], element.props['Iz']
+    J = element.props['J']
+
+    # Pre-calculated terms
+    EIy_L = E * Iy / L
+    EIz_L = E * Iz / L
+    GA_J_L = G * J / L
+
+    # Local stiffness matrix (K_local) 12x12
+    K_local = np.zeros((12, 12))
+
+    # Axial (DOF 1, 7)
+    K_local[0, 0] = K_local[6, 6] = E * A / L
+    K_local[0, 6] = K_local[6, 0] = -E * A / L
+
+    # Torsion (DOF 4, 10)
+    K_local[3, 3] = K_local[9, 9] = GA_J_L
+    K_local[3, 9] = K_local[9, 3] = -GA_J_L
+
+    # Shear/Bending in Y-Z plane (Bending about Z-axis, Shear in Y-dir: DOF 2, 6, 8, 12)
+    K_local[1, 1] = K_local[7, 7] = 12 * EIz_L / L**2
+    K_local[1, 7] = K_local[7, 1] = -12 * EIz_L / L**2
+    K_local[1, 5] = K_local[5, 1] = 6 * EIz_L / L
+    K_local[1, 11] = K_local[11, 1] = 6 * EIz_L / L
+    K_local[7, 5] = K_local[5, 7] = -6 * EIz_L / L
+    K_local[7, 11] = K_local[11, 7] = -6 * EIz_L / L
+    K_local[5, 5] = K_local[11, 11] = 4 * EIz_L
+    K_local[5, 11] = K_local[11, 5] = 2 * EIz_L
+
+    # Shear/Bending in X-Z plane (Bending about Y-axis, Shear in Z-dir: DOF 3, 5, 9, 11)
+    # Note: Indices are 0-based, so dx=0, dy=1, dz=2, rx=3, ry=4, rz=5.
+    # DOF (3, 9) for bending about Y axis (index 4) and shear in Z direction (index 2)
+    K_local[2, 2] = K_local[8, 8] = 12 * EIy_L / L**2
+    K_local[2, 8] = K_local[8, 2] = -12 * EIy_L / L**2
+    K_local[2, 4] = K_local[4, 2] = -6 * EIy_L / L # Note the sign change for Y-bending convention
+    K_local[2, 10] = K_local[10, 2] = -6 * EIy_L / L
+    K_local[8, 4] = K_local[4, 8] = 6 * EIy_L / L
+    K_local[8, 10] = K_local[10, 8] = 6 * EIy_L / L
+    K_local[4, 4] = K_local[10, 10] = 4 * EIy_L
+    K_local[4, 10] = K_local[10, 4] = 2 * EIy_L
+
+    return K_local
+
+def get_transformation_matrix(element: Element) -> np.ndarray:
+    """Generates the 12x12 transformation matrix (T) from local to global coordinates."""
+    n1, n2 = element.start_node, element.end_node
+    L = element.length
+    
+    if L < 1e-9: # Avoid division by zero for zero-length elements
+        return np.eye(12)
+
+    # Direction cosines
+    lx = (n2.x - n1.x) / L
+    mx = (n2.y - n1.y) / L
+    nx = (n2.z - n1.z) / L
+    
+    # We assume the local y-axis is perpendicular to the global Z-axis (Z-up convention)
+    # The third local axis (z) is often taken perpendicular to the X-Z plane for columns
+    # For a general frame, we use the vector cross product to define the local axes.
+    # Standard 3D frame assumption: the local y-axis is in the plane of the local x-axis and the global Z-axis.
+    
+    # Case 1: Element is vertical (parallel to global Z-axis)
+    if abs(lx) < 1e-6 and abs(mx) < 1e-6:
+        ly, my, ny = 1, 0, 0
+        lz, mz, nz = 0, nx, -mx # lz=0, mz=nx (0 or 1), nz=-mx (0) -> lz=0, mz=0, nz=1
+    # Case 2: General case
+    else:
+        D = np.sqrt(lx**2 + mx**2)
+        ly = -mx / D
+        my = lx / D
+        ny = 0
         
-        # NOTE: A simplified approach is used here, assuming F_local is the 12x1 vector of forces 
-        # calculated from the solved U_case. In a full FEA, the code would need K_local and T_matrix.
-        # Since we cannot replicate the full K_local and T_matrix calculation here without the base code,
-        # we will mock the local forces based on the already existing global solution logic.
+        # nz = lx * my - mx * ly (Cross product of x and y direction cosines)
+        # We need the third vector (z') to be perpendicular to x' and y'.
+        # Assuming the reference vector for 'up' is [0, 0, 1] (Global Z)
+        # Direction cosines of the third axis (z') defined by cross product
+        # lz = my * nx - ly * mx (This seems wrong based on standard transformation)
+        # Use the standard approach: z' is perp to x' and the global Y (for standard roll)
         
-        # For demonstration, we will assume the analysis function provides the 12 local forces F_local
-        # based on the solved U_case.
+        # Simplified standard transformation matrix T_3x3 (Rotation Matrix R)
+        # T_3x3 = [[lx, ly, lz], [mx, my, mz], [nx, ny, nz]]
         
-        # Placeholder for 12 local end forces [Fx1, Fy1, Fz1, Mx1, My1, Mz1, Fx2, Fy2, Fz2, Mx2, My2, Mz2]
-        # In a real scenario, this is derived from: f_local = k_local @ T_matrix @ u_global_subset
+        # We assume the local 'y' axis is perpendicular to global XZ plane when lz != 0
         
-        # MOCK RESULTS: A simple linear dependency on the displacement magnitude for demonstration.
-        U_mag = np.linalg.norm(U_case)
-        factor = U_mag * (1.0 + (1.0 if 'W' in case_name or 'E' in case_name else 0.0))
+        # Let V3 = [0, 0, 1] (Global Z-axis)
+        V1 = np.array([lx, mx, nx])
         
+        # Vector V2 (local y-axis) is defined as V3 x V1 (cross product)
+        V2 = np.cross([0, 0, 1], V1)
         
-        # Mocking 12 end forces: 
-        F_local = np.array([
-            -10 * factor,  # Fx_start (Axial)
-             5 * factor,   # Fy_start (Shear Y)
-             8 * factor,   # Fz_start (Shear Z)
-             1 * factor,   # Mx_start (Torsion X)
-             7 * factor,   # My_start (Moment Y - weak axis)
-            12 * factor,   # Mz_start (Moment Z - strong axis)
-             10 * factor,  # Fx_end
-            -5 * factor,   # Fy_end
-            -8 * factor,   # Fz_end
-            -1 * factor,   # Mx_end
-            -5 * factor,   # My_end
-            -8 * factor,   # Mz_end
-        ])
+        # Handle case where V1 is parallel to V3 (nx=1 or nx=-1)
+        if np.linalg.norm(V2) < 1e-6:
+            V2 = np.array([1, 0, 0]) # Assume local y is global x
         
-        self.results[case_name] = {
-            # Axial Force (constant along element for simple case)
-            'Axial_Start': F_local[0],
-            'Axial_End': F_local[6],
-            
-            # Shear Forces
-            'Shear_Y_Start': F_local[1],
-            'Shear_Y_End': F_local[7],
-            'Shear_Z_Start': F_local[2],
-            'Shear_Z_End': F_local[8],
-            
-            # Moments
-            'Moment_X_Start': F_local[3], # Torsion
-            'Moment_X_End': F_local[9],
-            'Moment_Y_Start': F_local[4], # Weak Axis Bending
-            'Moment_Y_End': F_local[10],
-            'Moment_Z_Start': F_local[5], # Strong Axis Bending
-            'Moment_Z_End': F_local[11],
-            
-            # Maximum Absolute Moment (for visualization/simple checks)
-            'Max_Abs_Moment': max(abs(F_local[5]), abs(F_local[11])) 
-        }
+        V2 = V2 / np.linalg.norm(V2)
+        
+        # Vector V3_local (local z-axis) is V1 x V2 (cross product)
+        V3_local = np.cross(V1, V2)
+        V3_local = V3_local / np.linalg.norm(V3_local)
+        
+        ly, my, ny = V2[0], V2[1], V2[2]
+        lz, mz, nz = V3_local[0], V3_local[1], V3_local[2]
+        
+    R = np.array([
+        [lx, mx, nx],
+        [ly, my, ny],
+        [lz, mz, nz]
+    ])
+
+    T_3x3 = R
+    
+    # Transformation matrix T is block diagonal: T_3x3, T_3x3, T_3x3, T_3x3
+    T = np.zeros((12, 12))
+    T[:3, :3] = T_3x3
+    T[3:6, 3:6] = T_3x3
+    T[6:9, 6:9] = T_3x3
+    T[9:12, 9:12] = T_3x3
+
+    return T
+
+# --- 3. Structure Class and Solver ---
 
 class Structure:
-    """The global structure model holding all nodes, elements, and the global matrices."""
-    def __init__(self):
-        self.nodes, self.elements, self.dof_map = {}, {}, {}
-        self.K_global = None
-        self.num_dof = 0
-        # Load and displacement cases are dictionaries
-        self.F_cases = defaultdict(lambda: np.zeros(self.num_dof))
-        self.U_cases = {}
+    """Manages the full finite element analysis model."""
+    def __init__(self, nodes: List[Node], elements: List[Element]):
+        self.nodes = nodes
+        self.elements = elements
+        self.dof_map = self._create_dof_map()
+        self.num_dof = len(self.dof_map)
+        self.K_global = np.zeros((self.num_dof, self.num_dof))
+        self.F_global = np.zeros(self.num_dof)
         
+        # Store initial restraints for result processing
+        self.initial_restraints = {n.id: n.restraints for n in nodes}
+
+    def _create_dof_map(self) -> Dict[Tuple[int, int], int]:
+        """Maps (Node ID, DOF Index) to Global DOF Number."""
+        dof_map = {}
+        global_dof_counter = 0
+        for node in self.nodes:
+            for i in range(6): # dx, dy, dz, rx, ry, rz
+                dof_map[(node.id, i)] = global_dof_counter
+                global_dof_counter += 1
+        return dof_map
+
     def assemble_matrices(self):
-        # Existing logic to build K_global and dof_map
-        # NOTE: Full implementation of K_global assembly is assumed to exist here.
-        self.num_dof = len(self.nodes) * 6
-        # Re-initialize F_cases with the correct size
-        self.F_cases = defaultdict(lambda: np.zeros(self.num_dof))
-        # Mock K_global assembly (identity matrix for demonstration only)
-        self.K_global = np.eye(self.num_dof) * 1000 
-        return True
-
-    def add_gravity_loads(self, case_name, q_gravity, levels):
-        """Applies uniform gravity load to beams at specified Z levels (case-specific)."""
-        if self.num_dof == 0: return # Matrix not assembled
+        """Assembles the global stiffness matrix (K) and load vector (F)."""
+        # Reset matrices
+        self.K_global.fill(0.0)
+        self.F_global.fill(0.0)
         
-        level_beams = [e for e in self.elements.values() 
-                       if (e.start_node.z in levels and e.end_node.z in levels and e.start_node.z == e.end_node.z)]
-
-        for beam in level_beams:
-            # Gravity load is applied as nodal forces in the negative Z direction (DOF index 2)
-            load_at_node = q_gravity * beam.length / 2
+        for element in self.elements:
+            T = get_transformation_matrix(element)
+            K_local = get_element_stiffness_matrix(element)
             
-            if (beam.start_node.id, 2) in self.dof_map:
-                self.F_cases[case_name][self.dof_map[(beam.start_node.id, 2)]] -= load_at_node
-            if (beam.end_node.id, 2) in self.dof_map:
-                self.F_cases[case_name][self.dof_map[(beam.end_node.id, 2)]] -= load_at_node
+            # Global Stiffness: K_global = T^T * K_local * T
+            K_global_e = T.T @ K_local @ T
+            
+            # Map element DOFs (12) to global DOFs
+            node_ids = [element.start_node.id, element.end_node.id]
+            global_indices = []
+            for node_id in node_ids:
+                for i in range(6):
+                    global_indices.append(self.dof_map[(node_id, i)])
 
-    def add_lateral_nodal_loads(self, case_name, loads):
-        """Applies a dictionary of nodal forces {node_id: [Fx, Fy, Fz, Mx, My, Mz]} for a specific case."""
-        if self.num_dof == 0: return 
+            # Assembly: Add element stiffness to global matrix
+            for i in range(12):
+                for j in range(12):
+                    self.K_global[global_indices[i], global_indices[j]] += K_global_e[i, j]
 
-        for node_id, forces in loads.items():
+        # Assemble global load vector F
+        for node in self.nodes:
             for i in range(6):
-                if node_id in self.nodes and (node_id, i) in self.dof_map:
-                    self.F_cases[case_name][self.dof_map[(node_id, i)]] += forces[i]
+                global_dof = self.dof_map[(node.id, i)]
+                self.F_global[global_dof] += node.load[i]
 
-    def solve_case(self, case_name):
-        """Solves the system for a single load case, applying boundary conditions."""
-        F_case = self.F_cases.get(case_name)
-        if F_case is None or self.K_global is None:
-            return False, f"Load case {case_name} or K matrix missing."
-
-        # 1. Apply boundary conditions
-        restrained_dofs = []
-        for node in self.nodes.values():
-            for i, restrained in enumerate(node.restraints):
-                if restrained:
-                    restrained_dofs.append(self.dof_map[(node.id, i)])
-
-        free_dofs = [i for i in range(self.num_dof) if i not in restrained_dofs]
+    def solve(self) -> np.ndarray:
+        """Applies boundary conditions and solves for displacements."""
         
-        if not free_dofs:
-            # Structure is fully fixed (rigid body), no solving needed
-            self.U_cases[case_name] = np.zeros(self.num_dof)
-            return True, f"Case {case_name} solved (Fully fixed structure)."
-
-        # 2. Extract sub-matrices for free DOFs
-        K_ff = self.K_global[np.ix_(free_dofs, free_dofs)]
-        F_f = F_case[free_dofs]
+        free_dof, support_dof = [], []
         
-        try:
-            # 3. Solve for unknown displacements
-            U_f = np.linalg.solve(K_ff, F_f)
-            
-            # 4. Assemble the full displacement vector
-            U_global_for_case = np.zeros(self.num_dof)
-            for i, dof in enumerate(free_dofs):
-                U_global_for_case[dof] = U_f[i]
-                
-            self.U_cases[case_name] = U_global_for_case
-
-            # 5. Calculate reactions
-            F_r = self.K_global[np.ix_(restrained_dofs, free_dofs)] @ U_f
-            
-            idx = 0
-            for node in self.nodes.values():
-                node.reactions[case_name] = [0.0] * 6
-                for i, restrained in enumerate(node.restraints):
-                    if restrained:
-                        # Reaction Force = F_applied_at_restrained_dof - K_rf * U_f (The negative is usually handled by the FEA system setup)
-                        node.reactions[case_name][i] = F_r[idx] 
-                        idx += 1
-
-            return True, f"Case {case_name} solved successfully."
-            
-        except np.linalg.LinAlgError:
-            return False, f"Case {case_name}: System is singular (mechanisms or instability)."
-
-    def calculate_element_results(self, case_name):
-        """Calculates internal forces for all elements for a given case."""
-        U_case = self.U_cases.get(case_name, np.zeros(self.num_dof))
-        for element in self.elements.values():
-            element.calculate_results(case_name, U_case, self.dof_map)
-            
-# --- 2. Load Calculation Helpers (IS Code Proxies) ---
-
-# Simplified IS 875 Part 3 Proxy: Calculates Wind Pressure and Nodal Force
-def calculate_wind_loads(structure, nodes_data, wind_speed, terrain_cat, k_imp, wind_direction):
-    """
-    Calculates equivalent static wind nodal loads based on simplified IS 875 (Part 3) approach.
-    Assumes fully covered, rectangular building.
-    Loads are applied at floor levels in the X or Y direction.
-    """
-    loads = defaultdict(lambda: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-    
-    # ASSUMPTIONS (Simplified IS 875 parameters):
-    Vb = wind_speed # Basic Wind Speed (m/s)
-    K1 = 1.0 # Probability factor (assumed)
-    K2_map = {1: 1.2, 2: 1.0, 3: 0.9, 4: 0.7} # Terrain/Height Factor (Simplified)
-    K2 = K2_map.get(terrain_cat, 1.0)
-    K3 = 1.0 # Topography factor (assumed)
-    Kd = 0.8 # Directionality factor (assumed)
-    Ka = 1.0 # Area averaging factor (assumed)
-    Kc = 0.9 # Combination factor (assumed)
-    Cp = 0.8 # External Pressure Coeff (assumed for windward side)
-    
-    # 1. Calculate Design Wind Pressure (Pz)
-    Vz = Vb * K1 * K2 * K3 # Design Wind Speed
-    Pz = 0.6 * Vz**2 # Design Wind Pressure (N/m^2)
-    Pd = Pz * Kd * Ka * Kc * k_imp # Design Pressure (factored) (N/m^2)
-
-    # Convert to kN/m^2 for compatibility with kN units
-    Pd_kN = Pd / 1000 # kN/m^2
-
-    # 2. Identify unique floor Z coordinates (excluding ground Z=0)
-    z_coords = sorted(list(set(n['z'] for n in nodes_data if n['z'] > 0)))
-    
-    # 3. Determine the tributary area (A_trib) at each floor
-    if not z_coords: return loads
-
-    # Assuming a typical building grid for calculating tributary width/depth
-    x_coords = sorted(list(set(n['x'] for n in nodes_data)))
-    y_coords = sorted(list(set(n['y'] for n in nodes_data)))
-    
-    Dx = x_coords[-1] - x_coords[0] if len(x_coords) > 1 else 10 # Building Dimension in X (Width)
-    Dy = y_coords[-1] - y_coords[0] if len(y_coords) > 1 else 10 # Building Dimension in Y (Depth)
-
-    H_storey = z_coords[0] if len(z_coords) >= 1 else 3.0 # Storey Height
-
-    for i, z in enumerate(z_coords):
-        # Tributary Height at floor level
-        if i == 0:
-            h_trib = H_storey / 2.0
-        elif i == len(z_coords) - 1:
-            h_trib = (z - z_coords[i-1]) / 2.0
-        else:
-            h_trib = (z - z_coords[i-1]) / 2.0 + (z_coords[i+1] - z) / 2.0
-
-        
-        if wind_direction == 'X':
-            # Wind on Y-face (Area = Dy * h_trib)
-            Area_trib = Dy * h_trib 
-            total_shear = Pd_kN * Cp * Area_trib 
-            dof_index = 0 # Fx (DOF 0)
-        else: # wind_direction == 'Y'
-            # Wind on X-face (Area = Dx * h_trib)
-            Area_trib = Dx * h_trib
-            total_shear = Pd_kN * Cp * Area_trib
-            dof_index = 1 # Fy (DOF 1)
-
-        # Distribute total shear to nodes at this level (assuming equal distribution)
-        level_nodes = [n['id'] for n in nodes_data if abs(n['z'] - z) < 0.1 and not any(n['restraints'])]
-        if level_nodes:
-            nodal_force = total_shear / len(level_nodes)
-            
-            for node_id in level_nodes:
-                loads[node_id][dof_index] = nodal_force
-
-    return loads
-
-# Simplified IS 1893 Proxy: Calculates Seismic (EQ) Loads
-def calculate_seismic_loads(structure, nodes_data, total_mass, seismic_zone, R_factor, I_factor):
-    """
-    Calculates Equivalent Static Forces (ESF) for Seismic analysis based on simplified IS 1893 (Part 1).
-    Loads are calculated in both X (E_X) and Y (E_Y) directions.
-    """
-    loads_x = defaultdict(lambda: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-    loads_y = defaultdict(lambda: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-    
-    # ASSUMPTIONS (Simplified IS 1893 parameters):
-    # Zone Factors (Z) for Zone II, III, IV, V (Simplified values)
-    Z_map = {'II': 0.10, 'III': 0.16, 'IV': 0.24, 'V': 0.36}
-    Z = Z_map.get(seismic_zone, 0.10)
-    
-    g = 9.81 # Acceleration due to gravity (m/s^2)
-    
-    # Assuming soil type is medium (Sa/g ~ 2.5/R)
-    Sa_g_R = 2.5 
-    
-    # Calculate Design Horizontal Seismic Coefficient (Ah)
-    Ah = (Z / 2) * (Sa_g_R / R_factor) * I_factor
-    
-    # Base Shear (Vb)
-    W_total = total_mass * g # Total Seismic Weight (kN)
-    Vb = Ah * W_total # Base Shear (kN)
-
-    # 1. Identify unique floor Z coordinates (for distribution)
-    z_coords = sorted(list(set(n['z'] for n in nodes_data if n['z'] > 0)))
-    if not z_coords: return loads_x, loads_y
-    
-    # 2. Calculate weight (Wi) and height (hi) for each floor
-    # We assume 'total_mass' is uniformly distributed among non-base levels.
-    num_floors = len(z_coords)
-    W_floor = W_total / num_floors if num_floors > 0 else 0 
-    
-    floor_data = [] # Stores [z, W, H]
-    for i, z in enumerate(z_coords):
-        floor_data.append({'z': z, 'W': W_floor, 'h': z})
-    
-    # 3. Calculate (Wi * hi^2) and Sum(Wi * hi^2)
-    sum_wh2 = sum(data['W'] * data['h']**2 for data in floor_data)
-    
-    # 4. Calculate Distribution Factor (Qi) and Seismic Force (Fi)
-    for data in floor_data:
-        # Distribution factor (Qi)
-        Qi = (data['W'] * data['h']**2) / sum_wh2 if sum_wh2 > 0 else 0
-        
-        # Lateral Seismic Force (Fi)
-        Fi = Vb * Qi
-        
-        # 5. Distribute Fi to nodes at this level (assuming equal distribution)
-        level_nodes = [n['id'] for n in nodes_data if abs(n['z'] - data['z']) < 0.1 and not any(n['restraints'])]
-        
-        if level_nodes:
-            nodal_force = Fi / len(level_nodes)
-            
-            for node_id in level_nodes:
-                # E_X (Force in X direction, DOF 0)
-                loads_x[node_id][0] = nodal_force
-                # E_Y (Force in Y direction, DOF 1)
-                loads_y[node_id][1] = nodal_force
-                
-    return loads_x, loads_y
-
-# --- 3. Main Analysis Function Refactor ---
-
-# Define the Load Combinations (Simplified IS 456 / IS 875 L-S Combinations for ULS)
-# D: Dead, L: Live, W: Wind, E: Earthquake
-LOAD_COMBINATIONS = {
-    '1.5(D+L)': {'D': 1.5, 'L': 1.5, 'W_X': 0.0, 'W_Y': 0.0, 'E_X': 0.0, 'E_Y': 0.0},
-    '1.2(D+L+W_X)': {'D': 1.2, 'L': 1.2, 'W_X': 1.2, 'W_Y': 0.0, 'E_X': 0.0, 'E_Y': 0.0},
-    '1.2(D+L+W_Y)': {'D': 1.2, 'L': 1.2, 'W_Y': 1.2, 'W_X': 0.0, 'E_X': 0.0, 'E_Y': 0.0},
-    '1.2(D+L-W_X)': {'D': 1.2, 'L': 1.2, 'W_X': -1.2, 'W_Y': 0.0, 'E_X': 0.0, 'E_Y': 0.0},
-    '1.2(D+L-W_Y)': {'D': 1.2, 'L': 1.2, 'W_Y': -1.2, 'W_X': 0.0, 'E_X': 0.0, 'E_Y': 0.0},
-    # Earthquake Combinations (E replaces W)
-    '1.2(D+L+E_X)': {'D': 1.2, 'L': 1.2, 'E_X': 1.2, 'E_Y': 0.0, 'W_X': 0.0, 'W_Y': 0.0},
-    '1.2(D+L+E_Y)': {'D': 1.2, 'L': 1.2, 'E_Y': 1.2, 'E_X': 0.0, 'W_X': 0.0, 'W_Y': 0.0},
-    '1.2(D+L-E_X)': {'D': 1.2, 'L': 1.2, 'E_X': -1.2, 'E_Y': 0.0, 'W_X': 0.0, 'W_Y': 0.0},
-    '1.2(D+L-E_Y)': {'D': 1.2, 'L': 1.2, 'E_Y': -1.2, 'E_X': 0.0, 'W_X': 0.0, 'W_Y': 0.0},
-    '0.9D+1.5W_X': {'D': 0.9, 'L': 0.0, 'W_X': 1.5, 'W_Y': 0.0, 'E_X': 0.0, 'E_Y': 0.0},
-    '0.9D+1.5E_X': {'D': 0.9, 'L': 0.0, 'E_X': 1.5, 'E_Y': 0.0, 'W_X': 0.0, 'W_Y': 0.0},
-    # ... more combinations would be included in a full design code implementation
-}
-
-@st.cache_data(show_spinner="Analyzing structure and calculating load combinations...")
-def generate_and_analyze_structure(num_bays_x, num_bays_y, num_stories, bay_len_x, bay_len_y, story_ht, col_props, beam_props, restraints, dead_load, live_load, wind_speed, terrain_cat, k_imp, wind_direction, total_mass, seismic_zone, R_factor, I_factor):
-    # --- 1. Generate Geometry (Nodes and Elements) ---
-    # ... (Geometry generation logic remains the same) ...
-    
-    # --- 2. Create Structure Object and Assemble K ---
-    s = Structure()
-    # (Node creation and element creation logic remains the same)
-    
-    # MOCK GEOMETRY & DOF MAPPING (since we cannot run the full FEA code snippet)
-    # This mock data is crucial for the load case logic below to work.
-    
-    # Mock DOF Map (simple 1-to-1 sequential mapping)
-    node_id_counter = 1
-    dof_counter = 0
-    nodes_data = [] # Temp list to hold node properties for load calcs
-    
-    for i in range(num_stories + 1):
-        for j in range(num_bays_y + 1):
-            for k in range(num_bays_x + 1):
-                x = k * bay_len_x
-                y = j * bay_len_y
-                z = i * story_ht
-                
-                node = Node(node_id_counter, x, y, z)
-                
-                # Apply base restraints (z=0)
-                if i == 0:
-                    node.restraints = restraints
-                
-                s.nodes[node_id_counter] = node
-                
-                for dof in range(6):
-                    s.dof_map[(node_id_counter, dof)] = dof_counter
-                    dof_counter += 1
-                
-                nodes_data.append({'id': node.id, 'x': node.x, 'y': node.y, 'z': node.z, 'restraints': node.restraints})
-                node_id_counter += 1
-    
-    # Mock Element creation (simplified to ensure element list is populated)
-    element_id_counter = 1
-    levels = sorted(list(set(n['z'] for n in nodes_data if n['z'] > 0)))
-
-    for n1 in s.nodes.values():
-        for n2 in s.nodes.values():
-            if n1.id < n2.id:
-                if abs(n1.x - n2.x) < 0.1 and abs(n1.y - n2.y) < 0.1 and abs(n1.z - n2.z) == story_ht:
-                    # Column
-                    s.elements[element_id_counter] = Element(element_id_counter, n1, n2, col_props)
-                    element_id_counter += 1
-                elif abs(n1.z - n2.z) < 0.1 and (abs(n1.x - n2.x) == bay_len_x or abs(n1.y - n2.y) == bay_len_y):
-                    # Beam
-                    s.elements[element_id_counter] = Element(element_id_counter, n1, n2, beam_props)
-                    element_id_counter += 1
-    
-    s.assemble_matrices()
-
-    # --- 3. Apply Loads (Per Case) ---
-    
-    # Gravity Loads (Applied to Beams only - Z=0 base excluded)
-    if dead_load > 0:
-        s.add_gravity_loads('D', dead_load, levels)
-    if live_load > 0:
-        s.add_gravity_loads('L', live_load, levels)
-
-    # Wind Loads (Applied as Nodal Lateral Forces)
-    wind_loads_x = calculate_wind_loads(s, nodes_data, wind_speed, terrain_cat, k_imp, 'X')
-    s.add_lateral_nodal_loads('W_X', wind_loads_x)
-    wind_loads_y = calculate_wind_loads(s, nodes_data, wind_speed, terrain_cat, k_imp, 'Y')
-    s.add_lateral_nodal_loads('W_Y', wind_loads_y)
-
-    # Seismic Loads (Applied as Nodal Lateral Forces - ESF Method)
-    seismic_loads_x, seismic_loads_y = calculate_seismic_loads(s, nodes_data, total_mass, seismic_zone, R_factor, I_factor)
-    s.add_lateral_nodal_loads('E_X', seismic_loads_x)
-    s.add_lateral_nodal_loads('E_Y', seismic_loads_y)
-    
-    # Get all load cases that actually have a force applied
-    active_load_cases = [case for case, F in s.F_cases.items() if np.linalg.norm(F) > 1e-6]
-    
-    # --- 4. Solve for Each Active Load Case ---
-    for case_name in active_load_cases:
-        s.solve_case(case_name)
-        s.calculate_element_results(case_name)
-
-    # --- 5. Determine Design Envelope (Max/Min Forces from Combinations) ---
-    design_elements = []
-    
-    for element in s.elements.values():
-        
-        # Initialize envelope values
-        env_axial_max = env_axial_min = 0
-        env_Mz_max = env_Mz_min = 0 # Strong Axis Moment
-        env_My_max = env_My_min = 0 # Weak Axis Moment
-        
-        # Track the critical combination and case for the max moment
-        critical_Mz_combo = ""
-        
-        for combo_name, factors in LOAD_COMBINATIONS.items():
-            
-            combined_axial = 0.0
-            combined_Mz_start = 0.0
-            combined_Mz_end = 0.0
-            combined_My_start = 0.0
-            
-            # Superimpose forces from all active cases
-            for case in active_load_cases:
-                if case in element.results:
-                    factor = factors.get(case, 0.0)
-                    results = element.results[case]
-                    
-                    combined_axial += factor * results['Axial_Start']
-                    combined_Mz_start += factor * results['Moment_Z_Start']
-                    combined_Mz_end += factor * results['Moment_Z_End']
-                    combined_My_start += factor * results['Moment_Y_Start']
-                    # Note: Full combination would combine all 12 forces/moments
-            
-            # Update the envelope (max and min)
-            # Axial
-            env_axial_max = max(env_axial_max, combined_axial)
-            env_axial_min = min(env_axial_min, combined_axial)
-            
-            # Strong Axis Moment (Mz)
-            if abs(combined_Mz_start) > abs(env_Mz_max):
-                 env_Mz_max = combined_Mz_start # Max absolute value
-                 critical_Mz_combo = combo_name
-            if abs(combined_Mz_end) > abs(abs(env_Mz_max)):
-                 env_Mz_max = combined_Mz_end # Max absolute value
-                 critical_Mz_combo = combo_name
-            
-            env_Mz_min = min(env_Mz_min, combined_Mz_start, combined_Mz_end)
-
-            # Weak Axis Moment (My)
-            env_My_max = max(env_My_max, combined_My_start)
-            env_My_min = min(env_My_min, combined_My_start)
-            
-        # Store final envelope results and critical case data
-        
-        # We need the results for the CRITICAL case/combo to populate the detailed table correctly
-        # Re-run combination calculation to get the actual results for the max moment combination
-        critical_Mz_results = {}
-        if critical_Mz_combo and element.results:
-            factors = LOAD_COMBINATIONS[critical_Mz_combo]
-            for key in ['Axial_Start', 'Moment_Z_Start', 'Moment_Z_End', 'Shear_Y_Start', 'Shear_Y_End', 'Moment_Y_Start', 'Moment_Y_End', 'Shear_Z_Start', 'Shear_Z_End']:
-                 critical_Mz_results[key] = sum(
-                    factors.get(case, 0.0) * element.results[case].get(key, 0.0)
-                    for case in active_load_cases if case in element.results
-                )
-            
-        design_elements.append({
-            'id': element.id, 
-            'start_node_id': element.start_node.id, 
-            'end_node_id': element.end_node.id, 
-            'length': element.length,
-            'start_node_pos': (element.start_node.x, element.start_node.y, element.start_node.z), 
-            'end_node_pos': (element.end_node.x, element.end_node.y, element.end_node.z), 
-            # Envelope Results
-            'design_axial_max': env_axial_max,
-            'design_Mz_max': env_Mz_max,
-            # Critical Case Results (for table details)
-            'critical_combo': critical_Mz_combo,
-            'critical_results': critical_Mz_results,
-            # Placeholder for reactions (will only show results for the first case 'D' if available)
-            'reactions_d': s.nodes[element.start_node.id].reactions.get('D', [0]*6) if element.start_node.z == 0 else [0]*6
-        })
-
-    # --- 6. Prepare Final Output Data Structure ---
-    
-    # Simple list of node properties for visualization
-    nodes_for_output = [{'id':n.id, 'x':n.x, 'y':n.y, 'z':n.z, 'restraints':n.restraints} for n in s.nodes.values()]
-
-    return {'nodes': nodes_for_output, 'elements': design_elements, 'active_cases': active_load_cases}
-
-# --- 4. Plotting (Unchanged for now) ---
-# ... (plot_3d_frame and plot_2d_frame functions remain the same)
-
-# --- 5. Streamlit UI (Refactored) ---
-
-st.title("IS Code Based 3D Frame FEA Tool")
-
-# Sidebar for Inputs
-st.sidebar.header("1. Geometry")
-# ... (Geometry inputs remain the same)
-num_bays_x = st.sidebar.slider("Bays (X)", 1, 5, 2)
-bay_len_x = st.sidebar.number_input("Bay Length (X, m)", 3.0, 10.0, 5.0)
-num_bays_y = st.sidebar.slider("Bays (Y)", 1, 5, 2)
-bay_len_y = st.sidebar.number_input("Bay Length (Y, m)", 3.0, 10.0, 5.0)
-num_stories = st.sidebar.slider("Stories", 1, 10, 3)
-story_ht = st.sidebar.number_input("Story Height (m)", 2.5, 5.0, 3.0)
-
-st.sidebar.header("2. Material & Sections")
-# ... (Property inputs remain the same)
-col_props = {'E': 25000000.0, 'G': 10000000.0, 'A': 0.25, 'Iy': 0.005, 'Iz': 0.005, 'J': 0.005, 'b': 0.5, 'h': 0.5}
-beam_props = {'E': 25000000.0, 'G': 10000000.0, 'A': 0.15, 'Iy': 0.001, 'Iz': 0.003, 'J': 0.002, 'b': 0.3, 'h': 0.5}
-
-st.sidebar.subheader("3. Gravity Loads (kN/m)")
-dead_load = st.sidebar.number_input("Dead Load (qD)", 5.0, 20.0, 10.0)
-live_load = st.sidebar.number_input("Live Load (qL)", 1.0, 10.0, 3.0)
-
-# --- Wind Load Inputs (IS 875 Part 3) ---
-st.sidebar.subheader("4. Wind Loads (IS 875)")
-
-# FIX: Calculate min_mass dynamically and use it as the default value 
-# to ensure the default value is never less than the minimum value.
-min_mass_calc = 50.0 * num_bays_x * num_bays_y * num_stories
-total_mass = st.sidebar.number_input("Total Seismic Mass (tonnes, proxy for W)", 
-                                     min_mass_calc, 
-                                     10000.0, 
-                                     min_mass_calc)
-
-wind_speed = st.sidebar.selectbox("Basic Wind Speed Vb (m/s)", [33, 39, 44, 47, 50, 55])
-terrain_cat = st.sidebar.selectbox("Terrain Category", [1, 2, 3, 4], index=2)
-k_imp = st.sidebar.number_input("Importance Factor (k_imp)", 1.0, 1.5, 1.0)
-wind_direction = st.sidebar.radio("Primary Wind Direction", ('X', 'Y'))
-
-# --- Seismic Load Inputs (IS 1893 Part 1) ---
-st.sidebar.subheader("5. Seismic Loads (IS 1893)")
-seismic_zone = st.sidebar.selectbox("Seismic Zone (Z)", ['II', 'III', 'IV', 'V'], index=1)
-I_factor = st.sidebar.number_input("Importance Factor (I)", 1.0, 2.0, 1.0)
-R_factor = st.sidebar.number_input("Response Reduction Factor (R)", 3.0, 5.0, 4.0)
-
-# Main Execution
-if st.button("Run Analysis"):
-    # Mock Restraints: Fixed support at base (z=0)
-    restraints = [True, True, True, True, True, True] 
-    
-    analysis_data = generate_and_analyze_structure(
-        num_bays_x, num_bays_y, num_stories, bay_len_x, bay_len_y, story_ht, 
-        col_props, beam_props, restraints, dead_load, live_load, 
-        wind_speed, terrain_cat, k_imp, wind_direction, 
-        total_mass, seismic_zone, R_factor, I_factor
-    )
-    
-    st.session_state['analysis_data'] = analysis_data
-    st.success(f"Analysis complete for {len(analysis_data['active_cases'])} load cases and {len(LOAD_COMBINATIONS)} combinations.")
-
-if 'analysis_data' in st.session_state:
-    nodes = st.session_state['analysis_data']['nodes']
-    elements = st.session_state['analysis_data']['elements']
-    active_cases = st.session_state['analysis_data']['active_cases']
-
-    st.subheader("Interactive 3D Visualization")
-    
-    # --- Checkboxes for Visualization (Items 1, 2, 3 - Not implemented fully yet) ---
-    st.write("Visualisation Options (Conceptual - Requires plot function update):")
-    col1, col2, col3 = st.columns(3)
-    # Checkbox 1: Full Sections (Item 1)
-    col1.checkbox("View Full Sections (3D)", disabled=True, help="Requires complex 3D plotting of cuboids, not yet implemented.")
-    # Checkbox 2: Applied Loads (Item 2)
-    col2.checkbox("View Applied Nodal Loads", disabled=True, help="Requires drawing arrows at load application points.")
-    # Dropdown for Diagrams (Item 3)
-    diagram_mode = col3.selectbox("Display Diagram", ('Deflection', 'Strong Axis Moment (Mz)', 'Axial Force'), index=1)
-    
-    # plot_3d_frame(nodes, elements, diagram_mode) # Assuming the plot function is here
-    # st.plotly_chart(fig, use_container_width=True) # Assuming the figure output
-
-    st.header("Analysis Results")
-    tab1, tab2, tab3 = st.tabs(["2D View (Conceptual)", "Support Reactions", "Detailed Element Results"])
-
-    # --- Tab 1: 2D View (Conceptual) ---
-    with tab1:
-        st.info("The 2D view and plotting logic is complex and relies on the full FEA solution which is mocked. You can use the data in the tables below.")
-    
-    # --- Tab 2: Support Reactions ---
-    with tab2:
-        st.subheader("Support Reactions (Base Nodes)")
-        if nodes:
-            # Filter for base nodes with reactions data
-            support_nodes = {n['id']: n for n in nodes if any(n['restraints'])}
-            
-            # Prepare data for all active cases for the selected node
-            
-            # Note: Since the full node object with all case reactions is not passed back, 
-            # we must rely on the mock data. We'll show the reactions for the first active case.
-            
-            if active_cases:
-                st.write(f"Showing reactions for **{active_cases[0]}** case only.")
-                
-                reaction_data = []
-                for node in nodes:
-                    if node['restraints'] and node['z'] < 0.1:
-                        # Find the corresponding element in the design list to get the reaction placeholder
-                        reaction_values = [e['reactions_d'] for e in elements if e['start_node_id'] == node['id'] and e['reactions_d'] != [0]*6]
-                        if reaction_values:
-                             reaction_data.append({
-                                'Node ID': node['id'],
-                                'Fx (kN)': reaction_values[0][0],
-                                'Fy (kN)': reaction_values[0][1],
-                                'Fz (kN)': reaction_values[0][2],
-                                'Mx (kNm)': reaction_values[0][3],
-                                'My (kNm)': reaction_values[0][4],
-                                'Mz (kNm)': reaction_values[0][5],
-                            })
-                
-                if reaction_data:
-                    st.dataframe(pd.DataFrame(reaction_data).round(2), use_container_width=True)
+        for node in self.nodes:
+            for i in range(6):
+                global_dof = self.dof_map[(node.id, i)]
+                if node.restraints[i]:
+                    support_dof.append(global_dof)
                 else:
-                    st.warning("No support nodes or reaction data found (check base restraints).")
-            else:
-                st.warning("No active load cases were defined or solved.")
-
-    # --- Tab 3: Detailed Element Results (Item 4) ---
-    with tab3:
-        st.subheader("Element Design Envelope Forces (ULS)")
+                    free_dof.append(global_dof)
         
-        # Prepare the comprehensive data dictionary based on the Envelope
-        data = []
-        for e in elements:
-            crit_res = e['critical_results']
-            
-            data.append({
-                'ID': e['id'], 
-                'Start Node': e['start_node_id'], 
-                'End Node': e['end_node_id'], 
-                'Span (m)': e['length'],
-                'Critical Combination': e['critical_combo'],
-                'Design Axial Max (kN)': e['design_axial_max'], # From Envelope
-                'Design Mz Max (kNm)': e['design_Mz_max'], # From Envelope
-                # Results for the Critical Combination for detail
-                'Mz Start (kNm)': crit_res.get('Moment_Z_Start', 0),
-                'Mz End (kNm)': crit_res.get('Moment_Z_End', 0),
-                'Vy Start (kN)': crit_res.get('Shear_Y_Start', 0),
-                'Vy End (kN)': crit_res.get('Shear_Y_End', 0),
-                'My Start (kNm)': crit_res.get('Moment_Y_Start', 0),
-                'Vz Start (kN)': crit_res.get('Shear_Z_Start', 0),
-            })
-            
-        # Display the new comprehensive dataframe
-        st.dataframe(pd.DataFrame(data).round(2), use_container_width=True)
+        # Partition K and F matrices
+        Kff = self.K_global[np.ix_(free_dof, free_dof)]
+        Kfs = self.K_global[np.ix_(free_dof, support_dof)]
+        Ksf = self.K_global[np.ix_(support_dof, free_dof)]
+        Kss = self.K_global[np.ix_(support_dof, support_dof)]
+        
+        Ff = self.F_global[free_dof]
+        Fs = self.F_global[support_dof]
+        
+        # Displacements at supports (Ds) are zero for fixed/pinned/roller
+        Ds = np.zeros(len(support_dof))
 
-    st.sidebar.markdown("---")
-    st.sidebar.info(f"Analysis performed for active load cases: **{', '.join(active_cases)}**")
+        # Solve for free displacements (Df): Kff * Df = Ff - Kfs * Ds
+        # Since Ds = 0, Kff * Df = Ff
+        Df = np.linalg.solve(Kff, Ff)
+
+        # Reconstruct full displacement vector D
+        D_full = np.zeros(self.num_dof)
+        D_full[free_dof] = Df
+        D_full[support_dof] = Ds
+        
+        # Calculate support reactions (Rs): Rs = Ksf * Df + Kss * Ds - Fs
+        # Since Ds = 0, Rs = Ksf * Df - Fs
+        Rs = Ksf @ Df - Fs
+
+        # Distribute results back to nodes
+        for node in self.nodes:
+            for i in range(6):
+                global_dof = self.dof_map[(node.id, i)]
+                
+                # Displacement
+                node.displacements[i] = D_full[global_dof]
+                
+                # Reaction (only for restrained DOFs)
+                if node.restraints[i]:
+                    idx = support_dof.index(global_dof)
+                    node.reactions[i] = Rs[idx]
+                else:
+                    node.reactions[i] = 0.0 # Ensure non-restrained reactions are zero
+
+        return D_full
+
+# --- 4. Geometry Generation and Load Application (IS Code Proxies) ---
+
+def generate_default_structure(params) -> Tuple[List[Node], List[Element]]:
+    """Generates a simple 1-bay, 1-storey frame based on user parameters."""
     
+    L = params['Bay Length']
+    H = params['Storey Height']
+    
+    # 8 Nodes: 4 at base (z=0), 4 at roof (z=H)
+    nodes = []
+    node_coords = [
+        (1, 0.0, 0.0, 0.0), (2, L, 0.0, 0.0), (3, L, L, 0.0), (4, 0.0, L, 0.0),
+        (5, 0.0, 0.0, H), (6, L, 0.0, H), (7, L, L, H), (8, 0.0, L, H),
+    ]
+    for id, x, y, z in node_coords:
+        node = Node(id, x, y, z)
+        # Apply Fixed restraints at the base (nodes 1-4)
+        if z == 0.0:
+            node.restraints = [True] * 6 # Fully fixed
+        nodes.append(node)
+        
+    node_map = {n.id: n for n in nodes}
+    
+    # Material and Section Properties (Assumed RC structure)
+    E_c = 5000 * np.sqrt(params['fck']) * 1e6 # N/m^2 (Approximate E for concrete M20, fck=20MPa -> 22.3e9 N/m2)
+    E = E_c / (1e6) # kN/m2 (approx 22.3e6 kN/m2)
+    G = E / (2 * (1 + 0.2)) # Shear Modulus (v=0.2)
+    rho = 25.0 # Density kN/m3 (RC)
+    
+    # Beam/Column section properties (Assumed 0.4x0.4m square sections)
+    b, d = params['Section Size'], params['Section Size']
+    A = b * d # Area
+    Iy = (b * d**3) / 12.0 # Moment of inertia about Y
+    Iz = (d * b**3) / 12.0 # Moment of inertia about Z
+    J = Iy + Iz # Torsional constant (approx for square)
+    
+    element_props = {'E': E, 'G': G, 'A': A, 'Iy': Iy, 'Iz': Iz, 'J': J, 'rho': rho}
+    
+    elements = []
+    elem_counter = 1
+    
+    # Columns (Vertical elements: 1-5, 2-6, 3-7, 4-8)
+    column_pairs = [(1, 5), (2, 6), (3, 7), (4, 8)]
+    for n_i, n_j in column_pairs:
+        elements.append(Element(elem_counter, node_map[n_i], node_map[n_j], element_props.copy()))
+        elem_counter += 1
+        
+    # Beams (Horizontal elements: 5-6, 6-7, 7-8, 8-5)
+    beam_pairs = [(5, 6), (6, 7), (7, 8), (8, 5)]
+    for n_i, n_j in beam_pairs:
+        elements.append(Element(elem_counter, node_map[n_i], node_map[n_j], element_props.copy()))
+        elem_counter += 1
+        
+    return nodes, elements
+
+def apply_dead_load(nodes, elements, params):
+    """Calculates self-weight (dead load) and applies it to nodes."""
+    # Reset nodal loads
+    for n in nodes:
+        n.load.fill(0.0)
+
+    # Distributed self-weight (q) = density * area (kN/m)
+    q = params['rho'] * params['Section Size']**2
+    
+    # Apply load to nodes (Pz)
+    for element in elements:
+        L = element.length
+        # Assume element is under vertical gravity load (-Z direction)
+        # Nodal equivalent forces (approximate P_i = qL/2, M_i = qL^2/12)
+        # We only apply P_i for simplicity and stability in a general 3D frame
+        P_z = -q * L / 2.0 # P_z is load in global Z direction
+
+        element.start_node.load[2] += P_z
+        element.end_node.load[2] += P_z
+        
+    # Also add slab/finish load to top beams (approximate by adding point load)
+    # Total slab load = (2.5 kN/m2 * L * L) / 4 nodes at roof
+    roof_load_per_node = -params['Slab DL (kN/m2)'] * params['Bay Length']**2 / 4.0
+    
+    for n in nodes:
+        if n.z == params['Storey Height']:
+            n.load[2] += roof_load_per_node
+
+def apply_live_load(nodes, elements, params):
+    """Applies simplified live load to the roof nodes."""
+    # Only applies vertical Live Load (Pz) to roof nodes (z=H)
+    roof_load_per_node = -params['Live Load (kN/m2)'] * params['Bay Length']**2 / 4.0
+    
+    # Reset existing Live Load contribution
+    for n in nodes:
+        n.load.fill(0.0)
+        
+    for n in nodes:
+        if n.z == params['Storey Height']:
+            n.load[2] += roof_load_per_node
+
+def apply_wind_load(nodes, elements, params, direction='X'):
+    """Applies simplified lateral (wind) load to the nodes."""
+    
+    # Wind Pressure (Pz) = 0.6 * Vz^2 (Simplified IS 875 Part 3 approximation)
+    Vb = params['Wind Speed (m/s)'] # Basic wind speed
+    Vz = Vb * 1.0 # Assuming Kd=1, Kt=1, Ka=1 (simplification)
+    P_wind = 0.6 * Vz**2 * 1e-3 # kN/m2
+    
+    # Area tributary to roof nodes (A = L * H / 2)
+    trib_area = params['Bay Length'] * params['Storey Height'] / 2.0
+    P_node = P_wind * trib_area # Nodal force magnitude
+    
+    # Reset existing Wind Load contribution
+    for n in nodes:
+        n.load.fill(0.0)
+
+    for n in nodes:
+        if n.z == params['Storey Height']:
+            if direction == 'X':
+                # Apply load in +X direction (index 0)
+                n.load[0] += P_node / 4.0 # Distributed to 4 roof nodes
+            elif direction == 'Y':
+                # Apply load in +Y direction (index 1)
+                n.load[1] += P_node / 4.0
+
+# --- 5. Main Analysis & Visualization Logic ---
+
+REACTION_SCALE = 2.0 # Default visualization scale
+
+def plot_3d_frame_with_reactions(nodes: List[Node], elements: List[Element], scale: float) -> go.Figure:
+    """Generates an interactive 3D Plotly figure of the frame structure and support reactions."""
+
+    fig = go.Figure()
+
+    # --- 1. Plot Elements (Lines) ---
+    line_x, line_y, line_z = [], [], []
+    for element in elements:
+        n1 = element.start_node
+        n2 = element.end_node
+        line_x.extend([n1.x, n2.x, None])
+        line_y.extend([n1.y, n2.y, None])
+        line_z.extend([n1.z, n2.z, None])
+
+    fig.add_trace(go.Scatter3d(
+        x=line_x, y=line_y, z=line_z,
+        mode='lines',
+        line=dict(color='rgba(40, 40, 40, 0.8)', width=4),
+        name='Structural Elements',
+        hoverinfo='none'
+    ))
+
+    # --- 2. Plot Nodes (Markers) ---
+    node_x = [n.x for n in nodes]
+    node_y = [n.y for n in nodes]
+    node_z = [n.z for n in nodes]
+    node_text = [f"Node {n.id}<br>({n.x}, {n.y}, {n.z})" for n in nodes]
+    # Highlight fixed supports (base nodes)
+    node_colors = ['#c0392b' if all(n.restraints) else '#2ecc71' for n in nodes] 
+
+    fig.add_trace(go.Scatter3d(
+        x=node_x, y=node_y, z=node_z,
+        mode='markers+text',
+        marker=dict(size=6, color=node_colors, symbol='circle', line=dict(width=1, color='Black')),
+        text=[n.id for n in nodes],
+        textfont=dict(color="black", size=10),
+        textposition='bottom center',
+        hovertext=node_text,
+        hoverinfo='text',
+        name='Nodes'
+    ))
+
+    # --- 3. Plot Support Reactions (Vectors) ---
+    reaction_traces = []
+    
+    # Forces Fx, Fy, Fz are indices 0, 1, 2 in n.reactions
+    reaction_props = [
+        (0, 'red', 'Reaction Fx (kN)'),
+        (1, 'green', 'Reaction Fy (kN)'),
+        (2, 'blue', 'Reaction Fz (kN)'),
+    ]
+
+    for index, color, name in reaction_props:
+        rx_x, rx_y, rx_z = [], [], []
+        arrow_hover_text = []
+
+        for n in nodes:
+            # Check if restrained in this DOF AND reaction is significant
+            if n.restraints[index] and abs(n.reactions[index]) > 1e-3: 
+                start_point = [n.x, n.y, n.z]
+                # Reaction vector: Magnitude is scaled for visibility
+                reaction_magnitude = n.reactions[index] 
+                
+                end_point = list(start_point)
+                
+                # Determine the axis for the reaction (0=X, 1=Y, 2=Z)
+                # The visual arrow direction is OPPOSITE the calculated reaction for clarity.
+                end_point[index] += -reaction_magnitude * scale / 25 
+
+                # Add coordinates for the vector line
+                rx_x.extend([start_point[0], end_point[0], None])
+                rx_y.extend([start_point[1], end_point[1], None])
+                rx_z.extend([start_point[2], end_point[2], None])
+                
+                # Store hover text for the arrow head
+                arrow_hover_text.append(f"Node {n.id}<br>{name}: {reaction_magnitude:.2f} kN")
+
+
+        if rx_x:
+            # Line trace for the reaction vector
+            reaction_traces.append(go.Scatter3d(
+                x=rx_x, y=rx_y, z=rx_z,
+                mode='lines',
+                line=dict(color=color, width=5),
+                name=name,
+                showlegend=True,
+                hoverinfo='none'
+            ))
+
+            # Arrow head markers (using diamond symbol)
+            # Filter out the None separators to get end points
+            arrow_x = [rx_x[i] for i in range(1, len(rx_x), 3) if rx_x[i] is not None]
+            arrow_y = [rx_y[i] for i in range(1, len(rx_y), 3) if rx_y[i] is not None]
+            arrow_z = [rx_z[i] for i in range(1, len(rx_z), 3) if rx_z[i] is not None]
+
+            reaction_traces.append(go.Scatter3d(
+                x=arrow_x, y=arrow_y, z=arrow_z,
+                mode='markers',
+                marker=dict(size=6, color=color, symbol='diamond'),
+                name=f"{name} (Value)",
+                showlegend=False,
+                hovertext=arrow_hover_text,
+                hoverinfo='text'
+            ))
+
+    fig.add_traces(reaction_traces)
+
+    # --- 4. Layout Configuration ---
+    
+    # Calculate bounds for cubic aspect ratio
+    max_x, min_x = max(node_x), min(node_x)
+    max_y, min_y = max(node_y), min(node_y)
+    max_z, min_z = max(node_z), min(node_z)
+    
+    range_x = max_x - min_x
+    range_y = max_y - min_y
+    range_z = max_z - min_z
+    max_range = max(range_x, range_y, range_z)
+    
+    center_x = (max_x + min_x) / 2
+    center_y = (max_y + min_y) / 2
+    center_z = (max_z + min_z) / 2
+
+    # Set axis limits to ensure a cubic view regardless of model shape
+    x_range = [center_x - max_range/2, center_x + max_range/2]
+    y_range = [center_y - max_range/2, center_y + max_range/2]
+    z_range = [center_z - max_range/2, center_z + max_range/2]
+    
+    fig.update_layout(
+        title=f'Interactive 3D Frame View: Load Case {st.session_state["current_load_case"]}',
+        height=700,
+        scene=dict(
+            xaxis=dict(title='X Axis (m)', backgroundcolor="#f0f0f0", gridcolor="white", showbackground=True, range=x_range),
+            yaxis=dict(title='Y Axis (m)', backgroundcolor="#f0f0f0", gridcolor="white", showbackground=True, range=y_range),
+            zaxis=dict(title='Z Axis (m)', backgroundcolor="#f0f0f0", gridcolor="white", showbackground=True, range=z_range),
+            aspectmode='manual',
+            aspectratio=dict(x=1, y=1, z=1), # Set cubic aspect ratio
+            camera=dict(
+                up=dict(x=0, y=0, z=1), # Z is up
+                center=dict(x=0, y=0, z=0),
+                eye=dict(x=1.5, y=1.5, z=1.5) # Default viewing angle
+            )
+        ),
+        margin=dict(l=0, r=0, b=0, t=30),
+        hovermode="closest",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+
+    return fig
+
+# --- 6. Streamlit App Layout and Data Management ---
+
+def run_analysis(nodes: List[Node], elements: List[Element], case: str, params: dict):
+    """Calculates loads, runs the FEA solver, and stores results."""
+    
+    # 1. Reset loads on all nodes
+    for n in nodes:
+        n.load.fill(0.0)
+
+    # 2. Apply load for the selected case
+    if case == 'DL (Dead Load)':
+        apply_dead_load(nodes, elements, params)
+    elif case == 'LL (Live Load)':
+        apply_live_load(nodes, elements, params)
+    elif case == 'WLX (Wind Load +X)':
+        apply_wind_load(nodes, elements, params, 'X')
+    elif case == 'WLY (Wind Load +Y)':
+        apply_wind_load(nodes, elements, params, 'Y')
+    else:
+        # For combinations like 1.5(DL+LL), combine existing load vectors
+        if case == '1.5(DL+LL)':
+            # Calculate and store DL
+            dl_nodes, dl_elements = generate_default_structure(params)
+            apply_dead_load(dl_nodes, dl_elements, params)
+            dl_loads = {n.id: n.load for n in dl_nodes}
+            
+            # Calculate and store LL
+            ll_nodes, ll_elements = generate_default_structure(params)
+            apply_live_load(ll_nodes, ll_elements, params)
+            ll_loads = {n.id: n.load for n in ll_nodes}
+            
+            # Apply combined factored load
+            for n in nodes:
+                n.load = 1.5 * (dl_loads[n.id] + ll_loads[n.id])
+            
+        elif case == '1.5(DL+WLX)':
+            # Calculate and store DL
+            dl_nodes, dl_elements = generate_default_structure(params)
+            apply_dead_load(dl_nodes, dl_elements, params)
+            dl_loads = {n.id: n.load for n in dl_nodes}
+            
+            # Calculate and store WLX
+            wlx_nodes, wlx_elements = generate_default_structure(params)
+            apply_wind_load(wlx_nodes, wlx_elements, params, 'X')
+            wlx_loads = {n.id: n.load for n in wlx_nodes}
+            
+            # Apply combined factored load
+            for n in nodes:
+                n.load = 1.5 * (dl_loads[n.id] + wlx_loads[n.id])
+        # Add more load combinations as needed...
+
+    # 3. Run Solver
+    try:
+        structure = Structure(nodes, elements)
+        structure.assemble_matrices()
+        structure.solve()
+        st.session_state['analysis_success'] = True
+    except np.linalg.LinAlgError:
+        st.session_state['analysis_success'] = False
+        st.error("Analysis Failed: Singular matrix detected. Check structure stability or restraints.")
+    except Exception as e:
+        st.session_state['analysis_success'] = False
+        st.error(f"Analysis Failed: {e}")
+
+    # 4. Store the resulting structure state
+    st.session_state['current_nodes'] = nodes
+    st.session_state['current_elements'] = elements
+    st.session_state['current_load_case'] = case
+
+
+# --- Streamlit Initial Setup ---
+if 'analysis_success' not in st.session_state:
+    st.session_state['analysis_success'] = False
+if 'current_load_case' not in st.session_state:
+    st.session_state['current_load_case'] = 'DL (Dead Load)'
+if 'current_nodes' not in st.session_state:
+    st.session_state['current_nodes'] = []
+if 'current_elements' not in st.session_state:
+    st.session_state['current_elements'] = []
+
+st.title("Full 3D Frame Analysis and Visualization (FEA & IS Code Demo)")
+st.markdown("This application performs a simplified 3D Finite Element Analysis on a single-bay, single-story frame.")
+st.markdown("---")
+
+# --- Sidebar for Parameters and Controls ---
+with st.sidebar:
+    st.header("1. Geometry and Material")
+    
+    # Input Parameters
+    BAY_LENGTH = st.number_input("Bay Length (L) (m)", min_value=1.0, value=10.0, step=1.0, key='L')
+    STOREY_HEIGHT = st.number_input("Storey Height (H) (m)", min_value=1.0, value=5.0, step=0.5, key='H')
+    SECTION_SIZE = st.number_input("Square Section Size (b=d) (m)", min_value=0.1, value=0.4, step=0.05, format="%.2f", key='b')
+    FCK = st.number_input("Concrete Grade (fck) (MPa)", min_value=15, value=20, step=5, key='fck')
+    
+    st.header("2. Load Inputs (Simplified IS Code)")
+    SLAB_DL = st.number_input("Slab Dead Load (kN/m²)", min_value=0.5, value=2.5, step=0.5, key='slab_dl')
+    LIVE_LOAD = st.number_input("Live Load (kN/m²)", min_value=0.5, value=3.0, step=0.5, key='ll')
+    WIND_SPEED = st.number_input("Basic Wind Speed (Vb) (m/s)", min_value=10, value=39, step=1, key='wind_speed')
+    
+    st.header("3. Analysis Control")
+    LOAD_CASES = [
+        'DL (Dead Load)', 'LL (Live Load)', 
+        'WLX (Wind Load +X)', 'WLY (Wind Load +Y)', 
+        '1.5(DL+LL)', '1.5(DL+WLX)'
+    ]
+    
+    selected_case = st.selectbox("Select Load Case to Analyze", options=LOAD_CASES, key='case_select')
+    
+    if st.button("Run Full Analysis", use_container_width=True):
+        # 1. Collect all parameters
+        analysis_params = {
+            'Bay Length': BAY_LENGTH,
+            'Storey Height': STOREY_HEIGHT,
+            'Section Size': SECTION_SIZE,
+            'fck': FCK,
+            'Slab DL (kN/m2)': SLAB_DL,
+            'Live Load (kN/m2)': LIVE_LOAD,
+            'Wind Speed (m/s)': WIND_SPEED,
+        }
+        
+        # 2. Generate new structure based on current parameters
+        nodes, elements = generate_default_structure(analysis_params)
+        
+        # 3. Run the solver for the selected case
+        run_analysis(nodes, elements, selected_case, analysis_params)
+        
+    st.subheader("Visualization Scale")
+    REACTION_SCALE = st.slider(
+        "Reaction Vector Scale",
+        min_value=0.1,
+        max_value=10.0,
+        value=2.0,
+        step=0.1,
+        key='reaction_scale',
+        help="Adjusts the visual length of the reaction force arrows."
+    )
+
+
+# --- Main Content Area ---
+if not st.session_state['analysis_success'] and not st.session_state['current_nodes']:
+    st.info("Click 'Run Full Analysis' in the sidebar to generate the structure and perform the FEA calculation.")
+elif st.session_state['analysis_success']:
+    
+    # 3D View is now the primary and only visualization
+    st.header(f"3D Model View: {st.session_state['current_load_case']}")
+    fig = plot_3d_frame_with_reactions(
+        st.session_state['current_nodes'], 
+        st.session_state['current_elements'], 
+        st.session_state['reaction_scale']
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("---")
+
+    # Tabs for detailed results
+    tab_reactions, tab_displacements, tab_internal_forces = st.tabs([
+        "Support Reactions (Calculated)", 
+        "Nodal Displacements", 
+        "Detailed Element Forces (Not Implemented)"
+    ])
+
+    with tab_reactions:
+        st.header("Calculated Support Reactions")
+        
+        support_nodes_data = [
+            {'Node ID': n.id, 
+             'Fx (kN)': f"{n.reactions[0]:.2f}", 
+             'Fy (kN)': f"{n.reactions[1]:.2f}", 
+             'Fz (kN)': f"{n.reactions[2]:.2f}",
+             'Mx (kNm)': f"{n.reactions[3]:.2f}", 
+             'My (kNm)': f"{n.reactions[4]:.2f}", 
+             'Mz (kNm)': f"{n.reactions[5]:.2f}"}
+            for n in st.session_state['current_nodes'] if any(n.restraints)
+        ]
+
+        if support_nodes_data:
+            df_reactions = pd.DataFrame(support_nodes_data)
+            st.dataframe(df_reactions.set_index('Node ID'), use_container_width=True)
+        else:
+            st.info("No supported (restrained) nodes found in the structure data.")
+
+    with tab_displacements:
+        st.header("Nodal Displacements")
+        
+        displacement_data = [
+            {'Node ID': n.id, 
+             'dx (m)': f"{n.displacements[0] * 1000:.4f}", # Convert to mm
+             'dy (m)': f"{n.displacements[1] * 1000:.4f}", # Convert to mm
+             'dz (m)': f"{n.displacements[2] * 1000:.4f}", # Convert to mm
+             'rx (rad)': f"{n.displacements[3]:.4e}",
+             'ry (rad)': f"{n.displacements[4]:.4e}",
+             'rz (rad)': f"{n.displacements[5]:.4e}"}
+            for n in st.session_state['current_nodes']
+        ]
+
+        df_displacements = pd.DataFrame(displacement_data)
+        st.dataframe(df_displacements.set_index('Node ID'), use_container_width=True)
+
+    with tab_internal_forces:
+        st.info("To show internal element forces (Axial, Shear, Moment), we would need to back-calculate them from the global displacements, which is complex and requires more code. This section is reserved for future expansion.")
+    
+# --- End of Streamlit App Layout ---
