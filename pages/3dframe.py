@@ -159,14 +159,21 @@ def plot_3d_frame(nodes_df, elements, node_coords):
         ))
 
     # --- 3. Layout Configuration ---
-    max_range = max(nodes_df['x'].max(), nodes_df['y'].max(), nodes_df['z'].max())
+    # Calculate the maximum dimension to ensure consistent scaling
+    max_x = nodes_df['x'].max() if not nodes_df.empty else 10
+    max_y = nodes_df['y'].max() if not nodes_df.empty else 10
+    max_z = nodes_df['z'].max() if not nodes_df.empty else 10
+    max_range = max(max_x, max_y, max_z)
+    
+    # Add a small buffer to the max range for better visualization padding
+    plot_limit = max_range * 1.1 
     
     fig.update_layout(
         title='Interactive 3D Frame Geometry',
         scene=dict(
-            xaxis=dict(title='X (Length)', showgrid=True, zeroline=False, range=[0, max_range]),
-            yaxis=dict(title='Y (Height)', showgrid=True, zeroline=False, range=[0, max_range]),
-            zaxis=dict(title='Z (Width)', showgrid=True, zeroline=False, range=[0, max_range]),
+            xaxis=dict(title='X (Length)', showgrid=True, zeroline=False, range=[0, plot_limit]),
+            yaxis=dict(title='Y (Height)', showgrid=True, zeroline=False, range=[0, plot_limit]),
+            zaxis=dict(title='Z (Width)', showgrid=True, zeroline=False, range=[0, plot_limit]),
             aspectmode='data' # Ensures aspect ratio is 1:1:1
         ),
         margin=dict(l=0, r=0, b=0, t=30),
@@ -179,7 +186,7 @@ def plot_3d_frame(nodes_df, elements, node_coords):
 
 # Sidebar for User Inputs
 st.sidebar.header("📐 Define Grid Geometry")
-st.sidebar.markdown("Use format: `L1, N2xL2, ...` (e.g., `5, 2x4.5`)")
+st.sidebar.markdown("Use format: `L1, N2xL2, ...` (e.g., `5, 2x4.5`). All units are arbitrary (e.g., meters).")
 
 # Input fields
 default_x = "3x5, 2x4"
@@ -205,20 +212,21 @@ z_input = st.sidebar.text_input(
 
 # Button to generate structure
 if st.sidebar.button("Generate & Visualize 🏗️"):
+    # Set the state flag to trigger the main logic block
     st.session_state['run_generation'] = True
 
 # Main Page Content
 st.title("3D Frame Geometry Generator")
 st.markdown("""
 This application models the geometry of a 3D frame structure based on flexible bay and floor inputs.
-The structure is visualized using an interactive 3D plot powered by Plotly.
+The structure is visualized using an interactive 3D plot powered by **Plotly**.
 """)
 
 # --- 4. Main Logic ---
 
-# Initial run or run triggered by button
+# Initialize session state flag if not present
 if 'run_generation' not in st.session_state:
-    st.session_state['run_generation'] = True
+    st.session_state['run_generation'] = True # Run on initial load
 
 if st.session_state.get('run_generation'):
     
@@ -249,9 +257,9 @@ if st.session_state.get('run_generation'):
             st.markdown(f"**Total Nodes:** `{len(nodes_df)}`")
             st.markdown(f"**Total Elements:** `{len(elements)}`")
         with col2:
-            st.markdown(f"**X Dimensions:** {x_lengths}")
-            st.markdown(f"**Y Dimensions (Heights):** {y_heights}")
-            st.markdown(f"**Z Dimensions:** {z_lengths}")
+            st.markdown(f"**X Dimensions:** `{x_lengths}`")
+            st.markdown(f"**Y Dimensions (Heights):** `{y_heights}`")
+            st.markdown(f"**Z Dimensions:** `{z_lengths}`")
 
         st.subheader("Node Coordinates (First 10)")
         st.dataframe(nodes_df[['id', 'x', 'y', 'z']].head(10))
