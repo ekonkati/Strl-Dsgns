@@ -345,4 +345,3 @@ if 'analysis_results' in st.session_state and st.session_state['analysis_results
     with tab3:
         data = [{'ID':e['id'], 'Start':e['start_node_id'], 'End':e['end_node_id'], 'Max Moment':e['results'].get('Max_Abs_Moment',0), 'Axial':e['results'].get('Axial_Start',0)} for e in elements]
         st.dataframe(pd.DataFrame(data).round(2), use_container_width=True)
-
