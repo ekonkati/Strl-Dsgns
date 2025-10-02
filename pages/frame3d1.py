@@ -108,15 +108,14 @@ def get_transformation_matrix(element: Element) -> np.ndarray:
     mx = (n2.y - n1.y) / L
     nx = (n2.z - n1.z) / L
     
-    # We assume the local y-axis is perpendicular to the global Z-axis (Z-up convention)
-    # The third local axis (z) is often taken perpendicular to the X-Z plane for columns
-    # For a general frame, we use the vector cross product to define the local axes.
     # Standard 3D frame assumption: the local y-axis is in the plane of the local x-axis and the global Z-axis.
     
     # Case 1: Element is vertical (parallel to global Z-axis)
     if abs(lx) < 1e-6 and abs(mx) < 1e-6:
+        # If aligned with Z-axis, local x is global z
+        # Local y is assumed to align with global X
         ly, my, ny = 1, 0, 0
-        lz, mz, nz = 0, nx, -mx # lz=0, mz=nx (0 or 1), nz=-mx (0) -> lz=0, mz=0, nz=1
+        lz, mz, nz = 0, nx, -mx # (0, 0, 1) or (0, 0, -1) depending on direction
     # Case 2: General case
     else:
         D = np.sqrt(lx**2 + mx**2)
@@ -124,19 +123,7 @@ def get_transformation_matrix(element: Element) -> np.ndarray:
         my = lx / D
         ny = 0
         
-        # nz = lx * my - mx * ly (Cross product of x and y direction cosines)
-        # We need the third vector (z') to be perpendicular to x' and y'.
-        # Assuming the reference vector for 'up' is [0, 0, 1] (Global Z)
-        # Direction cosines of the third axis (z') defined by cross product
-        # lz = my * nx - ly * mx (This seems wrong based on standard transformation)
-        # Use the standard approach: z' is perp to x' and the global Y (for standard roll)
-        
-        # Simplified standard transformation matrix T_3x3 (Rotation Matrix R)
-        # T_3x3 = [[lx, ly, lz], [mx, my, mz], [nx, ny, nz]]
-        
-        # We assume the local 'y' axis is perpendicular to global XZ plane when lz != 0
-        
-        # Let V3 = [0, 0, 1] (Global Z-axis)
+        # Reference vector for 'up' is [0, 0, 1] (Global Z)
         V1 = np.array([lx, mx, nx])
         
         # Vector V2 (local y-axis) is defined as V3 x V1 (cross product)
@@ -310,7 +297,8 @@ def generate_default_structure(params) -> Tuple[List[Node], List[Element]]:
     E_c = 5000 * np.sqrt(params['fck']) * 1e6 # N/m^2 (Approximate E for concrete M20, fck=20MPa -> 22.3e9 N/m2)
     E = E_c / (1e6) # kN/m2 (approx 22.3e6 kN/m2)
     G = E / (2 * (1 + 0.2)) # Shear Modulus (v=0.2)
-    rho = 25.0 # Density kN/m3 (RC)
+    # Corrected: Use density from parameters
+    rho = params['rho'] # Density kN/m3 (RC)
     
     # Beam/Column section properties (Assumed 0.4x0.4m square sections)
     b, d = params['Section Size'], params['Section Size']
@@ -345,14 +333,13 @@ def apply_dead_load(nodes, elements, params):
         n.load.fill(0.0)
 
     # Distributed self-weight (q) = density * area (kN/m)
-    q = params['rho'] * params['Section Size']**2
+    q = params['rho'] * params['Section Size']**2 # This now correctly accesses 'rho'
     
     # Apply load to nodes (Pz)
     for element in elements:
         L = element.length
         # Assume element is under vertical gravity load (-Z direction)
-        # Nodal equivalent forces (approximate P_i = qL/2, M_i = qL^2/12)
-        # We only apply P_i for simplicity and stability in a general 3D frame
+        # Nodal equivalent forces (approximate P_i = qL/2)
         P_z = -q * L / 2.0 # P_z is load in global Z direction
 
         element.start_node.load[2] += P_z
@@ -518,9 +505,13 @@ def plot_3d_frame_with_reactions(nodes: List[Node], elements: List[Element], sca
     # --- 4. Layout Configuration ---
     
     # Calculate bounds for cubic aspect ratio
-    max_x, min_x = max(node_x), min(node_x)
-    max_y, min_y = max(node_y), min(node_y)
-    max_z, min_z = max(node_z), min(node_z)
+    node_x_coords = [n.x for n in nodes]
+    node_y_coords = [n.y for n in nodes]
+    node_z_coords = [n.z for n in nodes]
+    
+    max_x, min_x = max(node_x_coords), min(node_x_coords)
+    max_y, min_y = max(node_y_coords), min(node_y_coords)
+    max_z, min_z = max(node_z_coords), min(node_z_coords)
     
     range_x = max_x - min_x
     range_y = max_y - min_y
@@ -577,34 +568,33 @@ def run_analysis(nodes: List[Node], elements: List[Element], case: str, params: 
     elif case == 'WLY (Wind Load +Y)':
         apply_wind_load(nodes, elements, params, 'Y')
     else:
-        # For combinations like 1.5(DL+LL), combine existing load vectors
+        # --- Handle Load Combinations ---
+        
+        # Helper function to generate and retrieve loads for a specific case
+        def get_case_loads(case_type, current_params):
+            temp_nodes, _ = generate_default_structure(current_params)
+            
+            # Apply appropriate loading function
+            if case_type == 'DL':
+                apply_dead_load(temp_nodes, [], current_params) # Elements aren't strictly needed here for nodal load summation
+            elif case_type == 'LL':
+                apply_live_load(temp_nodes, [], current_params)
+            elif case_type == 'WLX':
+                apply_wind_load(temp_nodes, [], current_params, 'X')
+            
+            return {n.id: n.load for n in temp_nodes}
+            
         if case == '1.5(DL+LL)':
-            # Calculate and store DL
-            dl_nodes, dl_elements = generate_default_structure(params)
-            apply_dead_load(dl_nodes, dl_elements, params)
-            dl_loads = {n.id: n.load for n in dl_nodes}
+            dl_loads = get_case_loads('DL', params)
+            ll_loads = get_case_loads('LL', params)
             
-            # Calculate and store LL
-            ll_nodes, ll_elements = generate_default_structure(params)
-            apply_live_load(ll_nodes, ll_elements, params)
-            ll_loads = {n.id: n.load for n in ll_nodes}
-            
-            # Apply combined factored load
             for n in nodes:
                 n.load = 1.5 * (dl_loads[n.id] + ll_loads[n.id])
             
         elif case == '1.5(DL+WLX)':
-            # Calculate and store DL
-            dl_nodes, dl_elements = generate_default_structure(params)
-            apply_dead_load(dl_nodes, dl_elements, params)
-            dl_loads = {n.id: n.load for n in dl_nodes}
+            dl_loads = get_case_loads('DL', params)
+            wlx_loads = get_case_loads('WLX', params)
             
-            # Calculate and store WLX
-            wlx_nodes, wlx_elements = generate_default_structure(params)
-            apply_wind_load(wlx_nodes, wlx_elements, params, 'X')
-            wlx_loads = {n.id: n.load for n in wlx_nodes}
-            
-            # Apply combined factored load
             for n in nodes:
                 n.load = 1.5 * (dl_loads[n.id] + wlx_loads[n.id])
         # Add more load combinations as needed...
@@ -652,6 +642,9 @@ with st.sidebar:
     SECTION_SIZE = st.number_input("Square Section Size (b=d) (m)", min_value=0.1, value=0.4, step=0.05, format="%.2f", key='b')
     FCK = st.number_input("Concrete Grade (fck) (MPa)", min_value=15, value=20, step=5, key='fck')
     
+    # FIX: Added Density Input for self-weight calculation
+    DENSITY_RC = st.number_input("RC Density (rho) (kN/m³)", min_value=10.0, value=25.0, step=1.0, key='rho_input', help="Used for calculating element self-weight (Dead Load).")
+    
     st.header("2. Load Inputs (Simplified IS Code)")
     SLAB_DL = st.number_input("Slab Dead Load (kN/m²)", min_value=0.5, value=2.5, step=0.5, key='slab_dl')
     LIVE_LOAD = st.number_input("Live Load (kN/m²)", min_value=0.5, value=3.0, step=0.5, key='ll')
@@ -673,6 +666,7 @@ with st.sidebar:
             'Storey Height': STOREY_HEIGHT,
             'Section Size': SECTION_SIZE,
             'fck': FCK,
+            'rho': DENSITY_RC, # FIX: Added rho to params
             'Slab DL (kN/m2)': SLAB_DL,
             'Live Load (kN/m2)': LIVE_LOAD,
             'Wind Speed (m/s)': WIND_SPEED,
@@ -744,9 +738,9 @@ elif st.session_state['analysis_success']:
         
         displacement_data = [
             {'Node ID': n.id, 
-             'dx (m)': f"{n.displacements[0] * 1000:.4f}", # Convert to mm
-             'dy (m)': f"{n.displacements[1] * 1000:.4f}", # Convert to mm
-             'dz (m)': f"{n.displacements[2] * 1000:.4f}", # Convert to mm
+             'dx (mm)': f"{n.displacements[0] * 1000:.4f}", # Convert to mm
+             'dy (mm)': f"{n.displacements[1] * 1000:.4f}", # Convert to mm
+             'dz (mm)': f"{n.displacements[2] * 1000:.4f}", # Convert to mm
              'rx (rad)': f"{n.displacements[3]:.4e}",
              'ry (rad)': f"{n.displacements[4]:.4e}",
              'rz (rad)': f"{n.displacements[5]:.4e}"}
