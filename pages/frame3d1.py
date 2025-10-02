@@ -66,9 +66,6 @@ class Element:
         # Placeholder for 12 local end forces [Fx1, Fy1, Fz1, Mx1, My1, Mz1, Fx2, Fy2, Fz2, Mx2, My2, Mz2]
         # In a real scenario, this is derived from: f_local = k_local @ T_matrix @ u_global_subset
         
-        # Mocking calculation (as the full K/T logic is outside the snippet):
-        # The key is that the results dictionary now belongs to a specific case.
-        
         # MOCK RESULTS: A simple linear dependency on the displacement magnitude for demonstration.
         U_mag = np.linalg.norm(U_case)
         factor = U_mag * (1.0 + (1.0 if 'W' in case_name or 'E' in case_name else 0.0))
@@ -576,9 +573,14 @@ live_load = st.sidebar.number_input("Live Load (qL)", 1.0, 10.0, 3.0)
 
 # --- Wind Load Inputs (IS 875 Part 3) ---
 st.sidebar.subheader("4. Wind Loads (IS 875)")
-# For calculation of mass for seismic analysis (assuming density * volume)
-# We need a proxy for the total mass/weight of the structure
-total_mass = st.sidebar.number_input("Total Seismic Mass (tonnes, proxy for W)", 50.0 * num_bays_x * num_bays_y * num_stories, 10000.0, 200.0)
+
+# FIX: Calculate min_mass dynamically and use it as the default value 
+# to ensure the default value is never less than the minimum value.
+min_mass_calc = 50.0 * num_bays_x * num_bays_y * num_stories
+total_mass = st.sidebar.number_input("Total Seismic Mass (tonnes, proxy for W)", 
+                                     min_mass_calc, 
+                                     10000.0, 
+                                     min_mass_calc)
 
 wind_speed = st.sidebar.selectbox("Basic Wind Speed Vb (m/s)", [33, 39, 44, 47, 50, 55])
 terrain_cat = st.sidebar.selectbox("Terrain Category", [1, 2, 3, 4], index=2)
