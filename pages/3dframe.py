@@ -258,7 +258,8 @@ def assemble_global_stiffness(nodes_df, elements, node_coords):
             for col_elem in range(12):
                 global_row = global_dofs[row_elem]
                 global_col = global_dofs[col_elem]
-                K_global[global_row, global_col] += k_global_elem[row_elem, col_col]
+                # Fix indexing here: use col_elem instead of col_col
+                K_global[global_row, global_col] += k_global_elem[row_elem, col_elem]
     
     return K_global
 
@@ -269,7 +270,11 @@ def calculate_gravity_loads(nodes_df, elements, load_params):
     Calculates element fixed-end forces (FEFs) from gravity loads (Self-weight + Slab Load).
     Assumes gravity acts in the negative Y direction.
     """
-    P_global = np.zeros(nodes_df.attrs.get('total_dofs', 0))
+    total_dofs = nodes_df.attrs.get('total_dofs', 0)
+    if total_dofs == 0:
+        return np.zeros(0)
+        
+    P_global = np.zeros(total_dofs)
     node_id_to_dof_start = nodes_df.set_index('id')['dof_start_index'].to_dict()
     x_lengths = nodes_df.attrs['x_lengths']
     z_lengths = nodes_df.attrs['z_lengths']
@@ -284,7 +289,7 @@ def calculate_gravity_loads(nodes_df, elements, load_params):
     q_total_ll = live_load
     q_total_gravity = q_slab_dl + q_total_ll # kN/m^2 (Unfactored)
 
-    # FIX: Escaping the backslash for the LaTeX command \text{}
+    # FIX: Corrected backslash escape for LaTeX in f-string
     st.markdown(f"**Calculated Gravity Floor Pressure (Unfactored):** ${q_total_gravity:.2f} \\text{ kN}/\\text{m}^2$")
 
     for elem in elements:
@@ -295,14 +300,9 @@ def calculate_gravity_loads(nodes_df, elements, load_params):
             # Column Self-Weight (Axial load in Y direction)
             w_sw = concrete_density * elem['A']
             # Only 50% of the UDL load is applied to the end nodes as point load in the local axial direction
-            # The other 50% contributes to the moment transfer to the connected beam (which is handled when calculating P_global)
             P_elem[0] = -w_sw * L / 2.0  # Force at start node (Local u)
             P_elem[6] = -w_sw * L / 2.0  # Force at end node (Local u)
             
-            # Note: For columns, the local x' axis is aligned with global Y.
-            # We are using an internal element array P_elem[12] that is in *local* coordinates.
-            # P_elem[0] and P_elem[6] correspond to the local axial force (F_x').
-
         elif 'beam' in elem['type']:
             # Beam Self-Weight (UDL in global Y, which is local Z' for a beam lying in the XZ plane)
             w_beam_sw = concrete_density * elem['A']
@@ -320,30 +320,26 @@ def calculate_gravity_loads(nodes_df, elements, load_params):
             w_slab = q_total_gravity * tributary_width
             w_total = w_beam_sw + w_slab # Total UDL on beam, acts in -Global Y direction
 
-            # Convert UDL w_total into Fixed-End Actions (FEFs) for bending about local Z' (Major Axis)
-            # FEF for UDL on a fixed-fixed beam (local V = F_y')
-            F_local_v = w_total * L / 2.0  # Forces at P_elem[1] and P_elem[7]
-            M_local_rz = w_total * L**2 / 12.0 # Moments at P_elem[5] and P_elem[11]
-
-            # Since the load acts in -Global Y, and beam local Z' is vertical for the grid (Global Y), 
-            # the load acts in the negative local Z' direction (P_elem[2] and P_elem[8]).
-            # The rotation is about local Y' (P_elem[4] and P_elem[10]).
-
-            # Simplified application (assuming local y' is the minor bending axis, z' is major bending axis)
+            # Convert UDL w_total into Fixed-End Actions (FEFs) for bending about local Y' (Minor Axis)
             # UDL (w) acts in the -Global Y direction. For horizontal beams, this is along the local Z' axis.
             # Forces F_z' at P_elem[2], P_elem[8]
             # Moments M_y' at P_elem[4], P_elem[10]
+            
+            F_local_v = w_total * L / 2.0  # Forces
+            M_local_rz = w_total * L**2 / 12.0 # Moments
 
-            P_elem[2] = F_local_v
-            P_elem[8] = F_local_v
-            P_elem[4] = M_local_rz # Positive moment (ccw about local y')
-            P_elem[10] = -M_local_rz # Negative moment (cw about local y')
+            # Load acts along -Global Y, which is along the positive local Z' axis (P_elem[2], P_elem[8]) 
+            # and causes rotation about the local Y' axis (P_elem[4], P_elem[10])
+            # Sign convention for FEF: Force +ve (upward), Moment +ve (CCW)
+            P_elem[2] = -F_local_v # FEF is upwards (opposite to load)
+            P_elem[8] = -F_local_v # FEF is upwards (opposite to load)
+            P_elem[4] = -M_local_rz # Moment at start (CCW is negative based on right-hand rule for local Y')
+            P_elem[10] = M_local_rz # Moment at end (CW is positive)
 
 
         # Transform P_elem (local) to P_global_elem (global) using the transformation matrix T
-        k_global_elem = calculate_element_stiffness(elem, node_coords) # We need T, K_global_elem gives T.T @ k_local @ T
         
-        # Recalculate T (similar logic as in calculate_element_stiffness)
+        # 1. Geometry and Direction Cosines (repeated from stiffness calc to get T)
         xi, yi, zi = node_coords[elem['start']]
         xj, yj, zj = node_coords[elem['end']]
         
@@ -360,20 +356,22 @@ def calculate_gravity_loads(nodes_df, elements, load_params):
         z_prime_vec = z_prime_vec / norm_z if norm_z > 1e-6 else np.array([0, 0, 0])
         y_prime_vec = np.cross(z_prime_vec, x_prime_vec)
         T_3x3 = np.array([x_prime_vec, y_prime_vec, z_prime_vec])
+        
         T = np.zeros((12, 12))
         for i in range(4): T[i*3:i*3+3, i*3:i*3+3] = T_3x3
 
-        P_global_elem = T.T @ P_elem # Transform fixed-end force vector
+        P_global_elem = T.T @ P_elem # Transform fixed-end force vector (reaction)
 
-        # Apply to global P vector (Subtraction is used because FEFs are actions, P_global is the reaction)
+        # Apply to global P vector (Addition is used because P_global is the reaction vector to the applied nodal forces)
         dof_start_i = node_id_to_dof_start[elem['start']]
         dof_start_j = node_id_to_dof_start[elem['end']]
         global_dofs = np.concatenate((np.arange(dof_start_i, dof_start_i + 6), 
                                       np.arange(dof_start_j, dof_start_j + 6)))
         
-        # P_global = P_nodal - P_fixed_end_actions
+        # P_global = P_nodal - P_fixed_end_actions (Assuming P_nodal is 0 initially)
+        # We are adding the negative of the FEF into P_global
         for i, global_dof in enumerate(global_dofs):
-            P_global[global_dof] -= P_global_elem[i]
+            P_global[global_dof] += P_global_elem[i]
 
     return P_global
 
@@ -384,6 +382,7 @@ def solve_fea_system(nodes_df, K_global, P_global):
     Applies boundary conditions (Fixed Support) and solves the system K*U = P for displacements U.
     """
     total_dofs = K_global.shape[0]
+    
     # 1. Identify Constrained (Known) DoFs
     known_dofs = [] # Indices of constrained DoFs (u=0)
     
@@ -424,7 +423,7 @@ def solve_fea_system(nodes_df, K_global, P_global):
     # 6. Update Nodes DataFrame with Results
     for index, row in nodes_df.iterrows():
         start_index = row['dof_start_index']
-        # Extract [u, v, w] (dofs 0, 1, 2)
+        # Extract [u, v, w, rx, ry, rz]
         nodes_df.loc[index, 'u'] = U_full[start_index : start_index + 6]
 
     return U_full
@@ -449,8 +448,6 @@ def perform_analysis(nodes_df, elements, load_params, node_coords):
         U_full = solve_fea_system(nodes_df.copy(), K_global, P_global) # Pass a copy to avoid side effects
     
     # 5. Calculate Internal Forces (Simplified Mocking for Visualization)
-    # NOTE: Full internal force calculation requires element transformation and superposition, which is extensive.
-    # We use a mock based on the magnitude of deflection to demonstrate the concept.
     max_deflection = np.max(np.abs(U_full[np.arange(1, len(U_full), 6)])) # Max V displacement
     
     if max_deflection == 0:
@@ -469,14 +466,11 @@ def perform_analysis(nodes_df, elements, load_params, node_coords):
 
     for elem in elements:
         if 'beam' in elem['type']:
-            # Mock forces based on position/span
             L = elem['L']
-            # Mock BM/SF proportional to span and load magnitude
             mock_force_base = 0.5 * q_total_gravity * L**2 * 0.1 # Mock BM proportional to wL^2/8
             elem['BM'] = np.random.uniform(mock_force_base * 0.8, mock_force_base * 1.2)
             elem['SF'] = np.random.uniform(mock_force_base * 0.5, mock_force_base * 0.8)
         elif 'column' in elem['type']:
-            # Mock forces based on gravity column loads
             L = elem['L']
             w_col_sw = concrete_density * elem['A']
             p1_row = nodes_df[nodes_df['id'] == elem['start']].iloc[0]
@@ -484,7 +478,7 @@ def perform_analysis(nodes_df, elements, load_params, node_coords):
             elem['BM'] = np.random.uniform(mock_force_base * 0.1, mock_force_base * 0.2) 
             elem['SF'] = np.random.uniform(mock_force_base * 0.05, mock_force_base * 0.1) 
             
-    st.success(f"FEA Solution Complete. Maximum Y Displacement (Deflection) is **${max_deflection * 1000:.2f} \text{ mm}$** (Under unfactored gravity load).")
+    st.success(f"FEA Solution Complete. Maximum Y Displacement (Deflection) is **${max_deflection * 1000:.2f} \\text{ mm}$** (Under unfactored gravity load).")
     st.info("Bending Moment and Shear Force diagrams remain conceptual for visualization. Actual values require full back-transformation which is highly complex.")
 
     return nodes_df, elements
@@ -663,6 +657,7 @@ prop_column = calculate_rc_properties(col_b, col_h, E_val)
 prop_beam = calculate_rc_properties(beam_b, beam_h, E_val)
 G_val = prop_column['G'] 
 
+# FIX: Corrected backslash escape for LaTeX in f-string
 st.sidebar.markdown(f"**Derived Shear Modulus G:** $ {G_val:.2e} \\text{ kN}/\\text{m}^2$")
 
 st.sidebar.markdown("---")
@@ -681,9 +676,11 @@ display_mode = st.sidebar.selectbox(
     ['Deflection', 'Geometry/Supports', 'Bending Moment', 'Shear Force']
 )
 
+# Mandatory button to trigger analysis
 if st.sidebar.button("Run Analysis & Visualize 🚀"):
     st.session_state['run_generation'] = True
 
+# Initialize state on first run
 if 'run_generation' not in st.session_state:
     st.session_state['run_generation'] = True 
 
@@ -731,7 +728,6 @@ if st.session_state.get('run_generation'):
             st.markdown(f"**Global Matrix Size (K):** `{st.session_state['K_global'].shape}`")
             st.markdown(f"**Total DoF:** `{nodes_df.attrs.get('total_dofs', 0)}`")
         with col3:
-            # FIX: Escaping the backslash for the LaTeX command \text{}
             st.markdown(f"**E:** ${E_val:.2e} \\text{ kN}/\\text{m}^2$")
             
         st.subheader("Section Property Details (Used in Stiffness Matrix)")
