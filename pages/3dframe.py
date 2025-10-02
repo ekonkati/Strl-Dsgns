@@ -63,7 +63,6 @@ def generate_grid_geometry(x_lengths, y_heights, z_lengths, foundation_depth, pr
     nodes = []
     elements = []
     node_id_counter = 1
-    element_id_counter = 1
 
     cum_x = np.cumsum([0] + x_lengths)
     above_ground_heights = [0] + y_heights
@@ -98,6 +97,7 @@ def generate_grid_geometry(x_lengths, y_heights, z_lengths, foundation_depth, pr
     nodes_df.attrs['z_lengths'] = z_lengths
 
     # 2. Generate Elements (Beams/Columns) and assign properties
+    element_id_counter = 1
     for i in range(x_grid_count):
         for j in range(y_grid_count):
             for k in range(z_grid_count):
@@ -264,7 +264,7 @@ def assemble_global_stiffness(nodes_df, elements, node_coords):
 
 # --- 4. Load Calculation & Vector Assembly ---
 
-def calculate_gravity_loads(nodes_df, elements, load_params):
+def calculate_gravity_loads(nodes_df, elements, load_params, node_coords):
     """
     Calculates element fixed-end forces (FEFs) from gravity loads (Self-weight + Slab Load).
     Assumes gravity acts in the negative Y direction.
@@ -368,7 +368,7 @@ def calculate_gravity_loads(nodes_df, elements, load_params):
 
     return P_global
 
-# --- 5. FEA Solver and Displacement Calculation (Unchanged) ---
+# --- 5. FEA Solver and Displacement Calculation (Updated) ---
 
 def solve_fea_system(nodes_df, K_global, P_global):
     """
@@ -390,7 +390,7 @@ def solve_fea_system(nodes_df, K_global, P_global):
     
     if len(unknown_dofs) == 0:
         st.error("No free degrees of freedom found. Structure is overly constrained.")
-        return np.zeros(total_dofs)
+        return nodes_df.copy(), np.zeros(total_dofs)
 
     # 3. Partition Matrices (Reduction)
     K_uu = K_global[np.ix_(unknown_dofs, unknown_dofs)]
@@ -401,12 +401,12 @@ def solve_fea_system(nodes_df, K_global, P_global):
         # Check for singularity before inversion
         if np.linalg.det(K_uu) < 1e-9:
              st.error("Reduced Stiffness Matrix is singular. Check structure stability (mechanisms).")
-             return np.zeros(total_dofs)
+             return nodes_df.copy(), np.zeros(total_dofs)
              
         U_u = np.linalg.solve(K_uu, P_u)
     except np.linalg.LinAlgError as e:
         st.error(f"Linear algebra error during solution: {e}")
-        return np.zeros(total_dofs)
+        return nodes_df.copy(), np.zeros(total_dofs)
 
     # 5. Assemble Full Displacement Vector (U)
     U_full = np.zeros(total_dofs)
@@ -414,9 +414,15 @@ def solve_fea_system(nodes_df, K_global, P_global):
     
     # 6. Update Nodes DataFrame with Results
     temp_nodes_df = nodes_df.copy() # Work on a copy to apply results back
+    
+    # FIX: Explicitly ensure the 'u' column is of object dtype to reliably store numpy arrays.
+    # This addresses the ValueError when assigning an array to a single cell.
+    temp_nodes_df['u'] = temp_nodes_df['u'].astype(object) 
+    
     for index, row in temp_nodes_df.iterrows():
         start_index = row['dof_start_index']
-        temp_nodes_df.loc[index, 'u'] = U_full[start_index : start_index + 6]
+        # Use .at for robust assignment of a complex type (numpy array) to a single cell.
+        temp_nodes_df.at[index, 'u'] = U_full[start_index : start_index + 6]
 
     return temp_nodes_df, U_full
 
@@ -433,7 +439,7 @@ def perform_analysis(nodes_df, elements, load_params, node_coords):
     st.session_state['K_global'] = K_global
     
     # 3. Generate Global Load Vector (P)
-    P_global = calculate_gravity_loads(nodes_df, elements, load_params)
+    P_global = calculate_gravity_loads(nodes_df, elements, load_params, node_coords)
     
     # 4. Solve System for Displacement (U)
     with st.spinner('Solving for displacement vector U...'):
@@ -447,6 +453,7 @@ def perform_analysis(nodes_df, elements, load_params, node_coords):
         st.warning("Calculated displacement is zero. Check loads/boundary conditions.")
         
     for index, row in nodes_df_solved.iterrows():
+        # Ensure 'u' is treated as an array before using np.linalg.norm
         u_vector = row['u']
         nodes_df_solved.loc[index, 'deflection_magnitude'] = np.linalg.norm(u_vector[0:3]) 
     
