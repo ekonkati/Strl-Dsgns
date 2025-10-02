@@ -222,12 +222,13 @@ def plot_3d_frame(nodes_df, elements, node_coords, display_mode):
         trace_name_suffix = ''
         result_key = None
         
-        
+    
+    base_width = 5 # Base width for geometry lines
     type_colors = {'foundation-column': 'darkorange', 'column': 'darkorchid', 'beam-x': 'royalblue', 'beam-z': 'darkcyan'}
     
     for elem_type, elems in elements_by_type.items():
         x_coords, y_coords, z_coords = [], [], []
-        line_widths = []
+        calculated_widths = [] # List to hold individual calculated widths for averaging
         
         for elem in elems:
             p1 = node_coords[elem['start']]
@@ -238,13 +239,20 @@ def plot_3d_frame(nodes_df, elements, node_coords, display_mode):
             y_coords.extend([p1[1], p2[1], None])
             z_coords.extend([p1[2], p2[2], None])
             
-            # Determine line width based on result if in analysis mode
-            width = 5 # Base width
+            # Calculate width based on result
+            width = base_width
             if result_key and elem[result_key] > 0:
                 width += elem[result_key] * line_width_scale
-            line_widths.extend([width, width, width])
+            calculated_widths.append(width) # Store the calculated width
 
 
+        # Fix: For Scatter3D traces, line width must be a single number, not a list.
+        # We calculate the average width for all elements of this type to represent the result magnitude.
+        final_line_width = base_width
+        if calculated_widths and result_key:
+            # Use average width and cap it at 15 to avoid excessively thick lines
+            final_line_width = min(sum(calculated_widths) / len(calculated_widths), 15)
+        
         fig.add_trace(go.Scatter3d(
             x=x_coords,
             y=y_coords,
@@ -252,7 +260,7 @@ def plot_3d_frame(nodes_df, elements, node_coords, display_mode):
             mode='lines',
             line=dict(
                 color=line_color if result_key else type_colors[elem_type], 
-                width=line_widths if result_key else 5
+                width=final_line_width # Pass the single calculated width value
             ),
             name=elem_type.replace('-', ' ').title() + trace_name_suffix,
             hoverinfo='none'
