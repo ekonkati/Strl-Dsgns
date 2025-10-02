@@ -111,7 +111,7 @@ def _get_element_matrices(element, node_coords, load_params, x_lengths, z_length
 
     k_local[2, 2], k_local[8, 8] = C7, C7  ; k_local[2, 8], k_local[8, 2] = -C7, -C7
     k_local[4, 4], k_local[10, 10] = C9, C9; k_local[4, 10], k_local[10, 4] = C10, C10
-    k_local[2, 4], k_local[4, 2] = -C8, -C8; k_local[2, 10], k_local[10, 2] = -C8, -C8
+    k_local[2, 4], k_local[4, 2] = -C8, -C8; k_local[2, 10], k_local[10, 8] = -C8, -C8
     k_local[8, 4], k_local[4, 8] = C8, C8  ; k_local[8, 10], k_local[10, 8] = C8, C8
     
     # 3. Local Fixed-End Force Vector (P_fixed_local)
@@ -310,7 +310,10 @@ def solve_fea_system(nodes_df, K_global, P_global):
     return temp_nodes_df, U_full
 
 def calculate_element_end_forces(elements, U_full, node_coords, nodes_df, load_params):
-    """Calculates internal forces for each element F_local = k_local * T * U_global - P_fixed_local."""
+    """
+    Calculates internal forces for each element F_local = k_local * T * U_global - P_fixed_local 
+    and determines the max absolute values for tooltips.
+    """
     x_lengths = nodes_df.attrs['x_lengths']
     z_lengths = nodes_df.attrs['z_lengths']
     node_id_to_dof_start = nodes_df.set_index('id')['dof_start_index'].to_dict()
@@ -333,14 +336,28 @@ def calculate_element_end_forces(elements, U_full, node_coords, nodes_df, load_p
             U_global_elem = U_full[global_dofs]
 
         # 2. Calculate F_local = k_local * T * U_global - P_fixed_local
+        # F_local order: Px, Py, Pz, Rx, Ry, Rz at Start; Px, Py, Pz, Rx, Ry, Rz at End (in local system)
         F_local = k_local @ (T @ U_global_elem) - P_fixed_local
         
         # 3. Extract key moments and forces
-        # Bending Moment Mz' (DOFs 5 and 11) is the major axis moment (gravity bending for horizontal beams)
-        elem['M_start'] = F_local[5] 
-        elem['M_end'] = F_local[11]
-        elem['Axial_Force'] = F_local[0]
+        # Axial Force (Fx'): Px' at Start (DOF 0)
+        Axial_Force = F_local[0]
+        # Major Bending Moment (Mz'): Rz' at Start (DOF 5) and End (DOF 11)
+        M_start = F_local[5] 
+        M_end = F_local[11]
+        # Major Shear Force (Vy'): Py' at Start (DOF 1) and End (DOF 7)
+        V_start = F_local[1] 
+        V_end = F_local[7]
+        
+        # 4. Calculate Max Absolute Values for Tooltip
+        elem['Axial_Force'] = Axial_Force
+        elem['M_start'] = M_start
+        elem['M_end'] = M_end
         elem['UDL_Total'] = w_udl
+        
+        elem['Max_Abs_Axial'] = abs(Axial_Force)
+        elem['Max_Abs_Moment'] = max(abs(M_start), abs(M_end))
+        elem['Max_Abs_Shear'] = max(abs(V_start), abs(V_end))
         
         elements_with_forces.append(elem)
         
@@ -392,7 +409,7 @@ def perform_analysis(nodes_df, elements, load_params, node_coords):
 def plot_3d_frame(nodes_df, elements, display_mode):
     """
     Creates an interactive 3D Plotly figure with visualizations for 
-    Deflection, Load Distribution, or Bending Moment.
+    Deflection, Load Distribution, or Bending Moment. Includes max forces in tooltips.
     """
     fig = go.Figure()
     
@@ -412,7 +429,7 @@ def plot_3d_frame(nodes_df, elements, display_mode):
         hoverinfo='text',
         text=[
             f"Node ID: {row['id']}<br>Coords: ({row['x']:.2f}, {row['y']:.2f}, {row['z']:.2f})<br>"
-            f"Disp (mm): U={row['u'][0]*1000:.2f}, V={row['u'][1]*1000:.2f}, W={row['u'][2]*1000:.2f}<br>"
+            f"Disp (mm): $U_{{x}}={row['u'][0]*1000:.2f}$, $U_{{y}}={row['u'][1]*1000:.2f}$, $U_{{z}}={row['u'][2]*1000:.2f}$<br>"
             f"Support: {row['support_type']}"
             for index, row in nodes_df.iterrows() if isinstance(row['u'], np.ndarray)
         ],
@@ -421,7 +438,9 @@ def plot_3d_frame(nodes_df, elements, display_mode):
 
     # 2. Plot Elements (Geometry)
     type_colors = {'column': 'darkorchid', 'beam-x': 'royalblue', 'beam-z': 'darkcyan'}
-    max_moment = max(abs(elem.get('M_start', 0)) for elem in elements) or 1.0
+    # Use Max_Abs_Moment from all elements for normalization
+    all_moments = [elem.get('Max_Abs_Moment', 0) for elem in elements]
+    max_moment = max(all_moments) or 1.0
     
     for elem_type, elems in pd.DataFrame(elements).groupby('type'):
         
@@ -436,21 +455,31 @@ def plot_3d_frame(nodes_df, elements, display_mode):
             line_width = base_width
             current_color = type_colors.get(elem_type, 'gray')
             
+            # --- Element Hover Text (Updated) ---
+            max_axial = elem.get('Max_Abs_Axial', 0)
+            max_shear = elem.get('Max_Abs_Shear', 0)
+            max_moment_elem = elem.get('Max_Abs_Moment', 0)
+            
             element_hover_text = (
-                f"Element ID: {elem['id']}<br>Type: {elem_type}<br>"
-                f"Section: {elem['b_m']*1000:.0f}x{elem['h_m']*1000:.0f} mm<br>"
-                f"L: {elem.get('L', 0):.2f} m"
+                f"**Element ID:** {elem['id']} | **Type:** {elem_type}<br>"
+                f"**Section:** {elem['b_m']*1000:.0f}x{elem['h_m']*1000:.0f} mm (b $\\times$ h)<br>"
+                f"**Length:** {elem.get('L', 0):.2f} m<br>"
+                f"---<br>"
+                f"**MAX FORCES (Abs):**<br>"
+                f"**Axial ($P_{{max}}$):** {max_axial:.2f} kN<br>"
+                f"**Shear ($V_{{y' max}}$):** {max_shear:.2f} kN<br>"
+                f"**Moment ($M_{{z' max}}$):** {max_moment_elem:.2f} kNm"
             )
             
             # --- Bending Moment Coloring/Sizing ---
-            moment_text = ""
+            moment_text_details = ""
             if display_mode == 'Bending Moment':
-                moment_text = f"<br>M_start: {elem.get('M_start', 0):.2f} kNm<br>M_end: {elem.get('M_end', 0):.2f} kNm"
+                M_start_val = elem.get('M_start', 0)
+                M_end_val = elem.get('M_end', 0)
+                moment_text_details = f"<br>M$_{{start}}$: {M_start_val:.2f} kNm | M$_{{end}}$: {M_end_val:.2f} kNm"
                 
-                # Color code by magnitude (Red=High, Blue=Low)
-                M_max_abs = max(abs(elem.get('M_start', 0)), abs(elem.get('M_end', 0)))
                 # Normalize moment for color scale 0 to 1
-                norm_moment = M_max_abs / max_moment 
+                norm_moment = max_moment_elem / max_moment 
                 
                 # Line width increase based on max moment in element
                 line_width = base_width + norm_moment * 5 
@@ -463,8 +492,8 @@ def plot_3d_frame(nodes_df, elements, display_mode):
             fig.add_trace(go.Scatter3d(
                 x=[p1_xyz[0], p2_xyz[0]], y=[p1_xyz[1], p2_xyz[1]], z=[p1_xyz[2], p2_xyz[2]],
                 mode='lines', line=dict(color=current_color, width=line_width),
-                name=None, hoverinfo='text', showlegend=(index == 0),
-                text=element_hover_text + moment_text
+                name=None, hoverinfo='text', showlegend=(index == 0 and display_mode != 'Bending Moment'),
+                text=element_hover_text + moment_text_details
             ))
             
             # --- Bending Moment Diagram Markers ---
@@ -481,7 +510,7 @@ def plot_3d_frame(nodes_df, elements, display_mode):
                             name=None,
                             showlegend=False,
                             hoverinfo='text',
-                            text=f"Node {node_id}<br>Moment Mz': {M_val:.2f} kNm"
+                            text=f"Node {node_id}<br>Moment $M_{{z'}}$: {M_val:.2f} kNm"
                         ))
 
             # --- Load Distribution Visualization (UDL Arrows) ---
@@ -587,7 +616,7 @@ if 'node_coords' not in st.session_state: st.session_state['node_coords'] = None
 # Main Page Content
 st.title("3D Frame Analysis: Load and Moment Visualization")
 st.markdown(r"""
-The structural solver now calculates **Element End Moments** based on solved displacements ($\mathbf{U}$) and applied fixed-end forces (gravity load). 
+The structural solver now calculates **Element End Moments** based on solved displacements ($\mathbf{U}$) and applied fixed-end forces (gravity load). Hover over any beam or column to see its maximum internal forces.
 
 * **Deflection:** Shows the deformed structure (magnified).
 * **Load Distribution:** Shows the UDL (Uniformly Distributed Load) arrows applied to the beams.
@@ -632,7 +661,7 @@ if st.session_state['nodes_df'] is not None:
     q_total_gravity = (load_params['slab_density'] * load_params['slab_thickness'] + 
                        load_params['finish_load'] + load_params['live_load'])
     
-    max_abs_moment = max(abs(elem.get('M_start', 0)) for elem in st.session_state['elements'])
+    max_abs_moment = max(abs(elem.get('Max_Abs_Moment', 0)) for elem in st.session_state['elements'])
     
     col1, col2, col3 = st.columns(3)
     with col1:
