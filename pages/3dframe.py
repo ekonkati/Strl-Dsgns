@@ -288,7 +288,8 @@ def calculate_gravity_loads(nodes_df, elements, load_params):
     q_total_ll = live_load
     q_total_gravity = q_slab_dl + q_total_ll # kN/m^2 (Unfactored)
 
-    st.markdown(f"**Calculated Gravity Floor Pressure (Unfactored):** ${q_total_gravity:.2f} \\text{ kN}/\\text{m}^2$")
+    # Corrected LaTeX unit formatting:
+    st.markdown(f"**Calculated Gravity Floor Pressure (Unfactored):** $ {q_total_gravity:.2f} \\frac{{kN}}{{m^2}} $")
 
     for elem in elements:
         P_elem = np.zeros(12)
@@ -672,7 +673,8 @@ prop_column = calculate_rc_properties(col_b, col_h, E_val)
 prop_beam = calculate_rc_properties(beam_b, beam_h, E_val)
 G_val = prop_column['G'] 
 
-st.sidebar.markdown(f"**Derived Shear Modulus G:** $ {G_val:.2e} \\text{ kN}/\\text{m}^2$")
+# Corrected LaTeX unit formatting:
+st.sidebar.markdown(f"**Derived Shear Modulus G:** $ {G_val:.2e} \\frac{{kN}}{{m^2}} $")
 
 st.sidebar.markdown("---")
 st.sidebar.header("⚖️ Gravity Load Inputs")
@@ -766,7 +768,8 @@ if st.session_state['nodes_df'] is not None:
     with col2:
         st.markdown(f"**Global Matrix Size (K):** `{st.session_state['K_global'].shape if 'K_global' in st.session_state else 'N/A'}`")
     with col3:
-        st.markdown(f"**E:** ${E_val:.2e} \\text{ kN}/\\text{m}^2$")
+        # Corrected LaTeX unit formatting:
+        st.markdown(f"**E:** $ {E_val:.2e} \\frac{{kN}}{{m^2}} $")
         
     st.subheader("Section Property Details")
     
