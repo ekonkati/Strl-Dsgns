@@ -2,11 +2,12 @@ import streamlit as st
 import streamlit.components.v1 as components
 import json
 
-# --- START OF PYTHON DATA DEFINITION & UTILITY FUNCTIONS ---
-
-# Structural Constants
+# Structural Constants (can be made input fields later)
 E_CONCRETE = 30e9 # Elastic Modulus for Concrete (N/m^2)
 FRAME_Z_OFFSET = 0
+FORCE_SCALE = 0.04 # Multiplier for visualization
+
+# --- Data Generation Utility Functions ---
 
 def calculate_rect_properties(d, w, E):
     """
@@ -16,11 +17,8 @@ def calculate_rect_properties(d, w, E):
     Returns a dictionary of calculated properties.
     """
     A = d * w
-    # Izz (Moment of inertia about the Z-axis, or parallel to the width)
     Izz = (w * (d**3)) / 12
-    # Iyy (Moment of inertia about the Y-axis, or parallel to the depth)
     Iyy = (d * (w**3)) / 12
-    
     return {'A': A, 'Izz': Izz, 'Iyy': Iyy, 'E': E}
 
 def create_section(name, d, w, E):
@@ -32,76 +30,106 @@ def create_section(name, d, w, E):
         **calculate_rect_properties(d, w, E)
     }
 
-# Node Data (coordinates)
-nodes_data = {
-    'N1': { 'x': 0, 'y': 0, 'z': FRAME_Z_OFFSET },
-    'N2': { 'x': 6, 'y': 0, 'z': FRAME_Z_OFFSET },
-    'N3': { 'x': 0, 'y': 4, 'z': FRAME_Z_OFFSET },
-    'N4': { 'x': 6, 'y': 4, 'z': FRAME_Z_OFFSET },
-}
-
-# Define geometric dimensions first (more centralized)
-COL_RECT_D = 0.60
-COL_RECT_W = 0.30
-B_RECT_D = 0.45
-B_RECT_W = 0.23
-SQ_COL_D = 0.40
-SQ_COL_W = 0.40
-
-# Section Properties: Using the utility function for cleaner creation
-section_properties = {
-    'COL_RECT': create_section('R-600x300', COL_RECT_D, COL_RECT_W, E_CONCRETE),
-    'B_RECT': create_section('R-450x230', B_RECT_D, B_RECT_W, E_CONCRETE),
-    'SQ_COL': create_section('R-400x400', SQ_COL_D, SQ_COL_W, E_CONCRETE)
-}
-
-# Member Data (sections, connectivity, and calculated internal forces)
-members_data = [
-    {
-        'id': 'C1', 'start': 'N1', 'end': 'N3',
-        'section_id': 'COL_RECT', 
-        'type': 'Column',
-        'forces': {
-            'M': { 'max': 30, 'profile': 'linear' }, 
-            'V': { 'max': 25, 'profile': 'constant' }
-        }
-    },
-    {
-        'id': 'B1', 'start': 'N3', 'end': 'N4',
-        'section_id': 'B_RECT',
-        'type': 'Beam',
-        'forces': {
-            'M': { 'max': 100, 'profile': 'parabolic' }, 
-            'V': { 'max': 50, 'profile': 'linear' }
-        }
-    },
-    {
-        'id': 'C2', 'start': 'N2', 'end': 'N4',
-        'section_id': 'SQ_COL', 
-        'type': 'Column',
-        'forces': {
-            'M': { 'max': 35, 'profile': 'linear' }, 
-            'V': { 'max': 30, 'profile': 'constant' }
-        }
+def generate_frame_data(span_x, height_y, col_d, col_w, beam_d, beam_w):
+    """
+    Generates all node, section, and member data based on user inputs.
+    """
+    # 1. Node Data (based on Span and Height)
+    nodes_data = {
+        'N1': { 'x': 0, 'y': 0, 'z': FRAME_Z_OFFSET },
+        'N2': { 'x': span_x, 'y': 0, 'z': FRAME_Z_OFFSET },
+        'N3': { 'x': 0, 'y': height_y, 'z': FRAME_Z_OFFSET },
+        'N4': { 'x': span_x, 'y': height_y, 'z': FRAME_Z_OFFSET },
     }
-]
 
-# 1. Serialize Python data into JSON strings
+    # 2. Section Properties
+    section_properties = {
+        'COLUMN': create_section('Column', col_d, col_w, E_CONCRETE),
+        'BEAM': create_section('Beam', beam_d, beam_w, E_CONCRETE),
+    }
+
+    # Mock Force Data (These should come from analysis, but are mocked here for visualization)
+    # The forces scale relative to geometry for a basic visual representation.
+    M_MAX = span_x * height_y * 10 
+    V_MAX = span_x * height_y * 8
+
+    # 3. Member Data (connectivity and forces)
+    members_data = [
+        {
+            'id': 'C1', 'start': 'N1', 'end': 'N3',
+            'section_id': 'COLUMN', 
+            'type': 'Column',
+            'forces': {
+                'M': { 'max': M_MAX * 0.8, 'profile': 'linear' }, 
+                'V': { 'max': V_MAX * 0.6, 'profile': 'constant' }
+            }
+        },
+        {
+            'id': 'B1', 'start': 'N3', 'end': 'N4',
+            'section_id': 'BEAM',
+            'type': 'Beam',
+            'forces': {
+                'M': { 'max': M_MAX, 'profile': 'parabolic' }, 
+                'V': { 'max': V_MAX, 'profile': 'linear' }
+            }
+        },
+        {
+            'id': 'C2', 'start': 'N2', 'end': 'N4',
+            'section_id': 'COLUMN', 
+            'type': 'Column',
+            'forces': {
+                'M': { 'max': M_MAX * 0.7, 'profile': 'linear' }, 
+                'V': { 'max': V_MAX * 0.5, 'profile': 'constant' }
+            }
+        }
+    ]
+    return nodes_data, members_data, section_properties
+
+# --- Streamlit Layout and Inputs ---
+
+st.set_page_config(layout="wide", page_title="Interactive Structural Frame Analysis")
+
+st.title("Interactive Structural Frame Analysis")
+st.markdown("Adjust the geometry and section sizes below to see the 3D frame update in real-time.")
+st.markdown("---")
+
+# 1. Input Sidebar (The recommended place for controls)
+with st.sidebar:
+    st.header("Frame Geometry (m)")
+    span_x = st.slider("Span (X-axis)", min_value=3.0, max_value=12.0, value=6.0, step=0.5)
+    height_y = st.slider("Height (Y-axis)", min_value=2.0, max_value=8.0, value=4.0, step=0.5)
+    
+    st.header("Section Sizes (m)")
+    st.subheader("Columns (B x H)")
+    col_w = st.number_input("Column Width (W, Z-axis)", min_value=0.1, max_value=1.0, value=0.30, step=0.05, format="%.2f")
+    col_d = st.number_input("Column Depth (D, Y-axis)", min_value=0.1, max_value=1.0, value=0.60, step=0.05, format="%.2f")
+    
+    st.subheader("Beams (B x H)")
+    beam_w = st.number_input("Beam Width (W, Z-axis)", min_value=0.1, max_value=1.0, value=0.23, step=0.05, format="%.2f")
+    beam_d = st.number_input("Beam Depth (D, Y-axis)", min_value=0.1, max_value=1.0, value=0.45, step=0.05, format="%.2f")
+
+# 2. Generate Data based on Inputs
+nodes_data, members_data, section_properties = generate_frame_data(
+    span_x, height_y, col_d, col_w, beam_d, beam_w
+)
+
+# 3. Serialize Python data into JSON strings for JavaScript
 nodes_json = json.dumps(nodes_data)
 members_json = json.dumps(members_data)
 sections_json = json.dumps(section_properties) 
 
 # --- START OF VISUALIZATION HTML/JS CONTENT ---
+# Injecting Python variables directly into the JavaScript string using f-string syntax
 html_content = f"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>3D/2D Structural Frame Visualization</title>
+    <title>3D Structural Frame Visualization</title>
     <!-- Core Three.js Library -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <!-- NEW: Orbit Controls for interactive camera manipulation -->
+    <!-- Orbit Controls for interactive camera manipulation -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/controls/OrbitControls.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -116,6 +144,7 @@ html_content = f"""
             align-items: center;
             height: 100vh;
         }}
+        /* ... (styles for info-panel, tooltip, visualization-wrapper, canvas-3d, etc. are the same) ... */
         #info-panel {{
             position: absolute;
             top: 10px;
@@ -151,13 +180,13 @@ html_content = f"""
             flex-direction: column;
         }}
         #canvas-3d {{
-            height: 65%; /* Primary view */
+            height: 65%;
             border-bottom: 2px solid #ccc;
             position: relative;
             width: 100%;
         }}
         #canvas-bottom-row {{
-            height: 35%; /* Bottom panel */
+            height: 35%; 
             width: 100%;
             display: flex;
         }}
@@ -204,16 +233,19 @@ html_content = f"""
     </div>
 
     <script>
-        // --- Global Constants and Setup ---
+        // --- Global Constants and Setup (Updated to use dynamic values) ---
         const SCALED_SECTION_FACTOR = 0.1; 
-        const FORCE_DIAGRAM_SCALE = 0.04; 
+        const FORCE_DIAGRAM_SCALE = {FORCE_SCALE}; // Passed from Python
         const FRAME_Z_OFFSET = 0; 
 
-        // --- Dynamic Data Structure (Passed from Python) ---
+        // --- Dynamic Data Structure (Passed from Python as JSON strings) ---
         const nodes = JSON.parse(`{nodes_json}`);
         const members = JSON.parse(`{members_json}`);
         const sections = JSON.parse(`{sections_json}`);
-
+        
+        // Dynamic world dimensions for orthographic camera calculation
+        const worldWidth = {span_x}; 
+        const worldHeight = {height_y}; 
 
         // --- Three.js Variables ---
         const container3D = document.getElementById('canvas-3d');
@@ -223,17 +255,13 @@ html_content = f"""
         const tooltip = document.getElementById('tooltip');
 
         let scene3D, camera3D, renderer3D, membersGroup3D;
-        let controls3D; // NEW: Camera controls variable
+        let controls3D; 
         let scene2D, camera2D, renderer2D, membersGroup2D;
         let sceneFocused, cameraFocused, rendererFocused, membersGroupFocused;
 
         let raycaster, mouse;
         let highlightedMember = null;
         
-        // Define world dimensions for orthographic camera calculation
-        const worldWidth = 6; 
-        const worldHeight = 4; 
-
         // --- Core Geometry Utility Functions ---
         
         /**
@@ -288,8 +316,10 @@ html_content = f"""
 
             let offset;
             if (isColumn) {{
+                // Offset perpendicular to the column, along the Z-axis for a beam force
                 offset = new THREE.Vector3(section.w * SCALED_SECTION_FACTOR * 1.5, 0, 0); 
             }} else {{
+                // Offset perpendicular to the beam, along the Y-axis for gravity load
                 offset = new THREE.Vector3(0, -section.d * SCALED_SECTION_FACTOR * 1.5, 0); 
             }}
 
@@ -346,6 +376,12 @@ html_content = f"""
 
         // --- Frame Assembly Function ---
         function createFrameGeometry(sceneGroup, is2DView) {{
+            // Clear existing geometry before redrawing
+            sceneGroup.children.forEach(child => child.geometry.dispose());
+            while(sceneGroup.children.length > 0){{
+                sceneGroup.remove(sceneGroup.children[0]);
+            }}
+
             // 1. Draw Members and Force Diagrams
             members.forEach(memberData => {{
                 const startNode = nodes[memberData.start];
@@ -376,8 +412,8 @@ html_content = f"""
             scene3D.background = new THREE.Color(0xe5e7eb); 
             
             camera3D = new THREE.PerspectiveCamera(50, container3D.clientWidth / container3D.clientHeight, 0.1, 1000);
-            camera3D.position.set(3, 3, 10);
-            camera3D.lookAt(3, 2, 0);
+            camera3D.position.set(worldWidth, worldHeight/2 + 2, worldWidth * 1.5);
+            camera3D.lookAt(worldWidth / 2, worldHeight / 2, 0);
             
             renderer3D = new THREE.WebGLRenderer({{ antialias: true }});
             renderer3D.setSize(container3D.clientWidth, container3D.clientHeight);
@@ -385,9 +421,9 @@ html_content = f"""
             
             // Initialize Orbit Controls
             controls3D = new THREE.OrbitControls(camera3D, renderer3D.domElement);
-            controls3D.target.set(3, 2, 0); // Focus on the center of the frame
+            controls3D.target.set(worldWidth / 2, worldHeight / 2, 0); 
             controls3D.update();
-            controls3D.enableDamping = true; // For smoother rotation
+            controls3D.enableDamping = true; 
 
             // Lighting Setup
             const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
@@ -403,7 +439,6 @@ html_content = f"""
             
             raycaster = new THREE.Raycaster();
             mouse = new THREE.Vector2();
-            // We attach mousemove listener to the renderer for interaction/highlighting
             renderer3D.domElement.addEventListener('mousemove', onMouseMove, false);
         }}
 
@@ -463,7 +498,7 @@ html_content = f"""
             sceneFocused.add(membersGroupFocused);
         }}
         
-        // --- Focused View Rendering Functions ---
+        // --- Focused View Rendering Functions (same logic) ---
         function updateFocusedView(memberData) {{
             while(membersGroupFocused.children.length > 0){{
                 membersGroupFocused.remove(membersGroupFocused.children[0]);
@@ -473,7 +508,6 @@ html_content = f"""
             const isColumn = memberData.type === 'Column';
             const section = sections[memberData.section_id]; 
             const focusedLength = 5; 
-            const focusedScaleFactor = focusedLength / 4; 
             const focusedSectionScale = SCALED_SECTION_FACTOR * 2.0; 
 
             let p1_local, p2_local;
@@ -510,224 +544,3 @@ html_content = f"""
                 const points = [];
                 const segments = 20;
                 const maxForce = memberData.forces[type].max;
-                const profile = memberData.forces[type].profile;
-
-                let offset;
-                if (isColumn) {{
-                    offset = new THREE.Vector3(offset_x, 0, 0);
-                }} else {{
-                    offset = new THREE.Vector3(0, offset_y, 0);
-                }}
-
-                const getForceMagnitude = (t) => {{
-                    switch (profile) {{
-                        case 'constant': return maxForce;
-                        case 'linear': return maxForce * (1 - t); 
-                        case 'parabolic': return maxForce * 4 * t * (1 - t); 
-                        default: return 0;
-                    }}
-                }};
-
-                for (let i = 0; i <= segments; i++) {{
-                    const t = i / segments;
-
-                    const pointOnMember = new THREE.Vector3().lerpVectors(p1_local, p2_local, t);
-                    const magnitude = getForceMagnitude(t) * FORCE_DIAGRAM_SCALE * focusedScaleFactor; 
-
-                    const forceVector = offset.clone().normalize().multiplyScalar(magnitude);
-                    const finalPoint = pointOnMember.add(forceVector);
-                    points.push(finalPoint);
-                }}
-
-                const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), 
-                                            new THREE.LineBasicMaterial({{ color: color, linewidth: 3 }}));
-                line.position.z = 0.01;
-                return line;
-            }};
-
-            membersGroupFocused.add(createFocusedForceDiagram('M', 0x3b82f6));
-            membersGroupFocused.add(createFocusedForceDiagram('V', 0xf87171));
-            
-            // Add small nodes at the start/end of the focused member
-            const nodeGeo = new THREE.SphereGeometry(SCALED_SECTION_FACTOR * 2.5, 16, 16); 
-            const nodeMat = new THREE.MeshPhongMaterial({{ color: 0x000000 }}); 
-
-            const node1 = new THREE.Mesh(nodeGeo, nodeMat);
-            node1.position.copy(p1_local);
-            membersGroupFocused.add(node1);
-
-            const node2 = new THREE.Mesh(nodeGeo, nodeMat);
-            node2.position.copy(p2_local);
-            membersGroupFocused.add(node2);
-
-
-            // Center the camera on the member
-            const centerPoint = mesh.position;
-            if (isColumn) {{
-                cameraFocused.position.set(centerPoint.x + 3.5, centerPoint.y + 0, 5); 
-            }} else {{
-                cameraFocused.position.set(centerPoint.x + 0.5, centerPoint.y, 5); 
-            }}
-            cameraFocused.lookAt(centerPoint);
-        }}
-
-        function clearFocusedView() {{
-             while(membersGroupFocused.children.length > 0){{
-                membersGroupFocused.remove(membersGroupFocused.children[0]);
-            }}
-            focusedPrompt.style.display = 'flex';
-        }}
-
-
-        // --- Interaction and Tooltip (Only on 3D View) ---
-
-        function onMouseMove(event) {{
-            // This is only for raycasting (highlighting), not rotation (which is handled by controls)
-            const rect = renderer3D.domElement.getBoundingClientRect();
-            mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-            mouse.y = - ((event.clientY - rect.top) / rect.height) * 2 + 1;
-
-            raycaster.setFromCamera(mouse, camera3D);
-
-            const intersects = raycaster.intersectObjects(membersGroup3D.children.filter(obj => obj.type === 'Mesh'));
-
-            if (intersects.length > 0) {{
-                const intersect = intersects[0];
-                const newHighlightedMember = intersect.object;
-
-                if (highlightedMember !== newHighlightedMember) {{
-                    if (highlightedMember) {{
-                        highlightedMember.material.color.setHex(highlightedMember.userData.originalColor);
-                    }}
-
-                    highlightedMember = newHighlightedMember;
-                    highlightedMember.material.color.set(0xfcd34d); 
-
-                    showTooltip(intersect.point, highlightedMember.userData.member);
-                    updateFocusedView(highlightedMember.userData.member);
-                }}
-            }} else {{
-                if (highlightedMember) {{
-                    highlightedMember.material.color.setHex(highlightedMember.userData.originalColor);
-                    highlightedMember = null;
-
-                    clearFocusedView();
-                }}
-                hideTooltip();
-            }}
-        }}
-
-        function showTooltip(point, data) {{
-            const rect = container3D.getBoundingClientRect();
-            const vector = point.clone().project(camera3D);
-            const clientX = (vector.x * 0.5 + 0.5) * rect.width + rect.left;
-            const clientY = (vector.y * -0.5 + 0.5) * rect.height + rect.top;
-            
-            // Lookup section properties (now contains A, Izz, Iyy, etc.)
-            const section = sections[data.section_id];
-
-            tooltip.style.left = `${{clientX + 10}}px`;
-            tooltip.style.top = `${{clientY + 10}}px`;
-
-            // Displaying structural properties
-            tooltip.innerHTML = `
-                <p class="font-bold text-lg">${{data.id}} (${{data.type}})</p>
-                <p>Section: ${{section.name}} ($ {{section.d*100}} x ${{section.w*100}} \\, mm)</p>
-                <hr class="my-1 border-yellow-600"/>
-                <p>Area (A): <span class="text-gray-200 font-mono">${{section.A.toFixed(3)}} \\, m^2</span></p>
-                <p>I_zz: <span class="text-gray-200 font-mono">${{section.Izz.toFixed(5)}} \\, m^4</span></p>
-                <p>I_yy: <span class="text-gray-200 font-mono">${{section.Iyy.toFixed(5)}} \\, m^4</span></p>
-                <hr class="my-1 border-yellow-600"/>
-                <p>Max Moment: <span class="text-blue-400 font-mono">${{data.forces.M.max.toFixed(1)}} \\, kNm</span></p>
-                <p>Max Shear: <span class="text-red-400 font-mono">${{data.forces.V.max.toFixed(1)}} \\, kN</span></p>
-            `;
-            tooltip.classList.add('visible');
-        }}
-
-        function hideTooltip() {{
-            tooltip.classList.remove('visible');
-        }}
-
-        // --- Resize Handler and Animation Loop ---
-        function onWindowResize() {{
-            // ... (Resize logic remains the same for all cameras/renderers)
-            camera3D.aspect = container3D.clientWidth / container3D.clientHeight;
-            camera3D.updateProjectionMatrix();
-            renderer3D.setSize(container3D.clientWidth, container3D.clientHeight);
-
-            const aspect2D = container2D.clientWidth / container2D.clientHeight;
-            const sizeX = worldWidth * 1.1;
-            const sizeY = worldHeight * 1.3;
-            let viewSize2D;
-
-            if (aspect2D > sizeX / sizeY) {{
-                viewSize2D = sizeY; 
-            }} else {{
-                viewSize2D = sizeX / aspect2D; 
-            }}
-
-            const halfSize2D = viewSize2D / 2;
-            camera2D.left = -halfSize2D * aspect2D;
-            camera2D.right = halfSize2D * aspect2D;
-            camera2D.top = halfSize2D;
-            camera2D.bottom = -halfSize2D;
-
-            camera2D.updateProjectionMatrix();
-            renderer2D.setSize(container2D.clientWidth, container2D.clientHeight);
-
-            cameraFocused.aspect = containerFocused.clientWidth / containerFocused.clientHeight;
-            cameraFocused.updateProjectionMatrix();
-            rendererFocused.setSize(containerFocused.clientWidth, containerFocused.clientHeight);
-        }}
-
-        function animate() {{
-            requestAnimationFrame(animate);
-
-            // NEW: Update controls only in the 3D view
-            if (controls3D) controls3D.update(); 
-
-            if (renderer3D) renderer3D.render(scene3D, camera3D);
-            if (renderer2D) renderer2D.render(scene2D, camera2D);
-            if (rendererFocused) rendererFocused.render(sceneFocused, cameraFocused);
-        }}
-
-        // Start the application
-        window.onload = function () {{
-            init3D();
-            init2D();
-            initFocused3D(); 
-            animate();
-            window.addEventListener('resize', onWindowResize, false);
-        }}
-    </script>
-</body>
-</html>
-"""
-# --- END OF VISUALIZATION HTML/JS CONTENT ---
-
-
-st.set_page_config(layout="wide", page_title="Structural Frame Viewer")
-
-st.title("Interactive Structural Frame Analysis")
-st.markdown("---")
-
-# Use the components.html function to embed the visualization
-components.html(
-    html_content,
-    height=850, 
-    scrolling=False
-)
-
-st.caption("Visualization powered by Three.js and Streamlit. Main 3D view is now rotatable.")
-
-# --- NEW: Data Visibility Section ---
-with st.expander("Show Hardcoded Input Data"):
-    st.subheader("Node Coordinates")
-    st.json(nodes_data)
-
-    st.subheader("Section Properties")
-    st.json(section_properties)
-
-    st.subheader("Member Connectivity and Forces")
-    st.json(members_data)
-# --- END NEW SECTION ---
