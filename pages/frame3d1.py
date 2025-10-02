@@ -719,3 +719,15 @@ components.html(
 )
 
 st.caption("Visualization powered by Three.js and Streamlit. Main 3D view is now rotatable.")
+
+# --- NEW: Data Visibility Section ---
+with st.expander("Show Hardcoded Input Data"):
+    st.subheader("Node Coordinates")
+    st.json(nodes_data)
+
+    st.subheader("Section Properties")
+    st.json(section_properties)
+
+    st.subheader("Member Connectivity and Forces")
+    st.json(members_data)
+# --- END NEW SECTION ---
